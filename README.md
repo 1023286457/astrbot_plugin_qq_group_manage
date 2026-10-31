@@ -6,7 +6,7 @@
 
 **在群里发一句话，就能完成禁言、审批、验证和风控的 AstrBot 插件**
 
-[![版本 2.9.1](https://img.shields.io/badge/版本-2.9.1-89b4fa.svg)](CHANGELOG.md)
+[![版本 2.8.1](https://img.shields.io/badge/版本-2.8.1-89b4fa.svg)](CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-a3be8c.svg)](LICENSE)
 [![作者 简单么么熊](https://img.shields.io/badge/作者-简单么么熊-f5b7c7.svg)](https://github.com/1023286457)
 [![QQ群 1033011763](https://img.shields.io/badge/QQ群-1033011763-12B7F5.svg)](https://qm.qq.com/q/JAq27UUlkO)
@@ -78,9 +78,9 @@ https://github.com/1023286457/astrbot_plugin_qq_group_manage
 3. 想用卡片按钮：机器人有自定义 Markdown 与按钮权限；Webhook 模式下还要订阅 `INTERACTION_CREATE` 事件。
 4. 想用进群验证和违禁词撤回：机器人必须能收到群内**全部消息**，只在被 @ 时才收到消息的模式无法工作。
 
-### 从 2.8.x 升级（目录改名了）
+### 从旧版本升级（目录改名了）
 
-2.9.0 起插件目录从 `astrbot_plugin_qq_group_admin` 改成了 `astrbot_plugin_qq_group_manage`，配置文件和数据目录路径随之变化。按顺序操作可完整保留配置：
+插件目录已从 `astrbot_plugin_qq_group_admin` 改为 `astrbot_plugin_qq_group_manage`，配置文件和数据目录路径随之变化。按顺序操作可完整保留配置：
 
 1. 关闭 AstrBot。
 2. `data/config/astrbot_plugin_qq_group_admin_config.json` → 改名为 `astrbot_plugin_qq_group_manage_config.json`。
