@@ -18,6 +18,7 @@ from astrbot.core.star.session_llm_manager import SessionServiceManager
 
 from .api import QQGroupManageAPI
 from .callback_guard import ReviewCallbackGuard
+from .dashboard import DashboardAPI
 from .durations import parse_duration
 from .storage import PluginStorage
 from .group_config import GroupConfig
@@ -466,7 +467,7 @@ def review_quote(event: AstrMessageEvent) -> set[str] | None:
     PLUGIN_NAME,
     "简单么么熊",
     "QQ 官方机器人群管理：禁言、入群申请审批、分群管理员与 LLM 工具",
-    "2.8.1",
+    "2.9.0",
 )
 class QQGroupAdminPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig) -> None:
@@ -493,6 +494,15 @@ class QQGroupAdminPlugin(Star):
         self._callback_guard = ReviewCallbackGuard()
         self.verifier = JoinVerifier(self)
         self._verify_task: asyncio.Task | None = None
+        self.dashboard = DashboardAPI(self)
+        try:
+            self.dashboard_available = self.dashboard.register()
+        except Exception:
+            self.dashboard_available = False
+            logger.exception(
+                "[%s] 注册 WebUI 视图 API 失败，插件其余功能继续运行",
+                PLUGIN_NAME,
+            )
         self._install_parser_patch()
 
     def _install_parser_patch(self) -> None:
@@ -2233,6 +2243,9 @@ class QQGroupAdminPlugin(Star):
 
     async def terminate(self) -> None:
         self._terminating = True
+        dashboard = getattr(self, "dashboard", None)
+        if dashboard is not None:
+            dashboard.unregister()
         for state in self._patched.values():
             self._restore_client_handlers(state)
         self._patched.clear()

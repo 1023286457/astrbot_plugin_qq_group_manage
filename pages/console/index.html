@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>群管控制台 · QQ官机群管</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <div class="boot-screen">
+        <div class="boot-logo">
+          <img src="./assets/logo.png" alt="" />
+        </div>
+        <div class="boot-spinner" aria-hidden="true"></div>
+        <p>正在连接群管控制台…</p>
+      </div>
+    </div>
+    <div id="toast-root" class="toast-root" aria-live="polite"></div>
+    <div id="modal-root"></div>
+    <noscript>
+      <div class="boot-screen"><p>需要启用 JavaScript 才能打开群管控制台。</p></div>
+    </noscript>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

@@ -19,6 +19,7 @@ class PluginStorage:
             "pending": {},
             "reviewed": {},
             "verifications": {},
+            "ui_preferences": {},
         }
         self.load()
 
@@ -51,6 +52,7 @@ class PluginStorage:
             "pending",
             "reviewed",
             "verifications",
+            "ui_preferences",
         ):
             if not isinstance(raw.get(name, {}), dict):
                 raise ValueError(f"{name} 必须是对象")
@@ -91,6 +93,9 @@ class PluginStorage:
                 not isinstance(binding, dict) for binding in callbacks.values()
             ):
                 raise ValueError("审批按钮映射必须是对象")
+        for key, value in raw.get("ui_preferences", {}).items():
+            if not isinstance(key, str) or not isinstance(value, str):
+                raise ValueError("界面偏好必须是字符串键值对象")
 
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -145,6 +150,30 @@ class PluginStorage:
             return None
         value = overrides.get(key)
         return value if isinstance(value, bool) else None
+
+    def ui_preferences(self) -> dict[str, str]:
+        preferences = self.data.get("ui_preferences")
+        if not isinstance(preferences, dict):
+            return {}
+        return {
+            str(key): str(value)
+            for key, value in preferences.items()
+            if isinstance(key, str) and isinstance(value, str)
+        }
+
+    def set_ui_preferences(self, values: dict[str, str]) -> dict[str, str]:
+        before = self.ui_preferences()
+        preferences = self.data.get("ui_preferences")
+        if not isinstance(preferences, dict):
+            preferences = {}
+            self.data["ui_preferences"] = preferences
+        preferences.update({str(key): str(value) for key, value in values.items()})
+        try:
+            self.save()
+        except Exception:
+            self.data["ui_preferences"] = before
+            raise
+        return self.ui_preferences()
 
     def set_group_feature_override(
         self,

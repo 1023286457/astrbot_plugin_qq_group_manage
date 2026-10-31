@@ -6,14 +6,14 @@
 
 **在群里发一句话，就能完成禁言、审批、验证和风控的 AstrBot 插件**
 
-[![版本 2.8.1](https://img.shields.io/badge/版本-2.8.1-89b4fa.svg)](CHANGELOG.md)
+[![版本 2.9.0](https://img.shields.io/badge/版本-2.9.0-89b4fa.svg)](CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-a3be8c.svg)](LICENSE)
 [![作者 简单么么熊](https://img.shields.io/badge/作者-简单么么熊-f5b7c7.svg)](https://github.com/1023286457)
 [![QQ群 1033011763](https://img.shields.io/badge/QQ群-1033011763-12B7F5.svg)](https://qm.qq.com/q/JAq27UUlkO)
 
 <img src="https://count.getloli.com/@1023286457_qq_group_manage?name=1023286457_qq_group_manage&amp;theme=booru-lewd&amp;padding=7&amp;offset=0&amp;align=top&amp;scale=1&amp;pixelated=1&amp;darkmode=auto" alt="访问计数" />
 
-[功能总览](#overview) · [安装](#install) · [指令速查](#commands) · [入群审批](#approval) · [进群验证](#verify) · [关键词风控](#keywords) · [权限与分群](#permissions) · [进退群通知](#notices) · [数据备份](#data)
+[功能总览](#overview) · [安装](#install) · [WebUI](#webui) · [指令速查](#commands) · [入群审批](#approval) · [进群验证](#verify) · [关键词风控](#keywords) · [权限与分群](#permissions) · [进退群通知](#notices) · [数据备份](#data)
 
 </div>
 
@@ -34,6 +34,32 @@ QQ 官方机器人能做的群管理动作有限，插件把这部分能力整�
 | 🔔 | **进退群通知** | 自定义欢迎与退群文案，支持艾特成员和成员头像 |
 | 🗂️ | **分群配置** | 每个群独立的群管名单、功能开关、词表与安全限制，也可全局统一 |
 | 🧠 | **模型工具** | 把禁言、解禁、查询和审批交给 LLM 调用，可选严格身份审查 |
+| 🖥️ | **WebUI 控制台** | 在 AstrBot 插件详情页直接处理申请、验证、群管与配置，无需回群操作 |
+
+---
+
+<a id="webui"></a>
+
+## 🖥️ WebUI 群管控制台
+
+插件自带一个与 AstrBot 插件市场视图风格一致的可视化页面，入口在：
+
+**AstrBot WebUI → 插件 → QQ官机群管 → 可视化视图 → 群管控制台**
+
+控制台分为六个页签：
+
+| 页签 | 能做什么 |
+| --- | --- |
+| 总览 | 待审申请、验证队列、群组数量、插件群管、功能开关与运行状态 |
+| 入群审批 | 查看申请资料与问答，直接同意或拒绝；拒绝可填写理由 |
+| 进群验证 | 查看题目、答错次数与剩余时间，放行或重新出题 |
+| 群组 | 查看群 UMO、配置来源、群管名单；添加/移除插件群管 |
+| 配置 | 编辑全局或分群配置，支持开关、词表、题库、模板与安全限制 |
+| 数据 | 导出 `state.json` 和配置快照，查看视图与运行信息 |
+
+视图只在已登录的 AstrBot Dashboard 中通过受限 iframe 加载，所有操作经 bridge 转发到插件后端，并复用 Dashboard 会话鉴权。视图里的审批、放行和禁言解除会直接调用 QQ 接口，操作前请确认群与成员。
+
+右上角的**调色盘**可以更改控制台主色：支持 6 个预设色和自定义取色。主题色只影响这个控制台，不会修改 AstrBot 其他页面；保存后写入插件数据目录的 `state.json`，下次打开自动恢复。
 
 ---
 
@@ -43,15 +69,16 @@ QQ 官方机器人能做的群管理动作有限，插件把这部分能力整�
 
 ### 版本要求
 
-插件声明的最低版本是 **AstrBot 4.25.3**，原因是配置面板用到了几个逐个版本才落地的组件：
+插件声明的最低版本是 **AstrBot 4.26.0**，原因是配置面板和 WebUI 视图用到了几个逐个版本才落地的组件：
 
 | 面板能力 | 所需版本 | 上游改动 |
 | --- | --- | --- |
 | 开关联动显示（`condition`） | 4.0.0 | [#2433](https://github.com/AstrBotDevs/AstrBot/pull/2433) |
 | 分群列表（`template_list`） | 4.10.4 | [#4208](https://github.com/AstrBotDevs/AstrBot/pull/4208) |
 | 折叠条目显示 UMO（`display_item`） | 4.25.3 | [#8228](https://github.com/AstrBotDevs/AstrBot/pull/8228) |
+| 插件 Web API（`astrbot.api.web`）与视图 bridge | 4.26.0 | [#5940](https://github.com/AstrBotDevs/AstrBot/pull/5940) |
 
-已完成的联调版本是 **4.26.8**；4.25.3 上的面板组件与核心接口已核对，但未做真实 QQ 群联调。低于 4.25.3 会出现面板显示异常，不建议尝试。
+已完成的联调版本是 **4.26.8**；4.25.3 上可继续使用 2.8.x，但本版本声明的最低版本是 4.26.0，因为 WebUI 视图依赖该版本才提供的插件 Web API。低于 4.26.0 时请在插件管理器提示中先升级 AstrBot。
 
 ### 安装方式
 
@@ -336,6 +363,7 @@ QQ 的[撤回接口](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_gro
 - **面板手动新增**：模板用插件默认值，请填真实群 UMO 并逐项核对后保存。没有建条目的群继续使用全局配置；删除条目即恢复这个行为。
 - **群身份格式**：`平台ID:GroupMessage:真实群ID`，与发送者无关。开启 AstrBot 独立会话也不会把群配置存到用户名下。群管发 `群管功能` 可查看本群 UMO；群白名单同样填这个 UMO，不要填独立会话下 `sid` 返回的用户 UMO。
 - **面板同步**：群内改动立即写入插件配置文件，重新打开面板就能看到。已经打开的表单不会自动刷新——群内改完请先重新打开面板再编辑，避免旧表单覆盖新值。面板保存后由 AstrBot 重载插件生效。
+- **控制台配置页**：WebUI 的「群管控制台 → 配置」与原生配置面板读写同一份配置；控制台保存后立即生效，不需要再回原生面板。分群配置条目也可以在这里创建、编辑和删除。
 
 群白名单和待审记录保留天数是全局项；保留天数在关闭分群时的全局入群申请配置里设置。分群模式下修改全局配置不会覆盖已有群条目。
 
@@ -362,6 +390,7 @@ QQ 的[撤回接口](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_gro
 | 内容 | 位置 |
 | --- | --- |
 | 群管名单、待审映射、验证记录 | `data/plugin_data/astrbot_plugin_qq_group_manage/state.json` |
+| 控制台主题色偏好 | `data/plugin_data/astrbot_plugin_qq_group_manage/state.json` 的 `ui_preferences` |
 | 群配置与词表 | AstrBot 插件配置文件的 `group_management.groups` |
 | 全局设置 | AstrBot 插件配置文件的 `group_management.global_settings` |
 
@@ -371,7 +400,7 @@ QQ 的[撤回接口](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_gro
 
 待审映射与审批完成标记默认保留 **30 天**：审批成功后移除待审内容，只留平台 ID、群 OpenID、申请 ID 和完成时间用于去重；过期记录在加载、查找、写入时顺带清理，不是定时任务。群管名单和群配置长期保存；群管名单的批量修改一次落盘，写盘失败则整批回滚并提示。
 
-备份时请**同时**备份插件配置文件和插件数据目录。
+备份时请**同时**备份插件配置文件和插件数据目录。也可以直接打开「群管控制台 → 数据」导出 `state.json` 与配置快照。
 
 ### 会发给模型的数据
 
@@ -397,6 +426,8 @@ QQ 的[撤回接口](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_gro
 | 按钮点了没反应 | 缺自定义 Markdown/按钮权限，或 Webhook 未订阅 `INTERACTION_CREATE` |
 | 违规消息检测不到 | 机器人只收到 @ 消息时无法检查全部群消息 |
 | 面板显示旧配置 | 已打开的表单不会自动刷新，重新打开面板再改 |
+| 看不到群管控制台 | 确认 AstrBot 不低于 4.26.0，插件已启用，并在插件详情页刷新后打开「可视化视图」 |
+| 控制台操作失败 | 查看 AstrBot 日志；审批/放行还要求对应 QQ 平台在线且有接口权限 |
 | 分群配置对不上号 | 用真实群发 `群管功能` 取得的 UMO，别用独立会话下的用户 UMO |
 
 ---
