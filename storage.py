@@ -8,6 +8,9 @@ from uuid import uuid4
 
 from astrbot.api import logger
 
+SEEN_GROUP_REFRESH_SECONDS = 5 * 60
+SEEN_GROUP_LIMIT = 1000
+
 
 class PluginStorage:
     def __init__(self, path: Path, retention_days: int = 30) -> None:
@@ -19,6 +22,8 @@ class PluginStorage:
             "pending": {},
             "reviewed": {},
             "verifications": {},
+            "seen_groups": {},
+            "group_notes": {},
             "ui_preferences": {},
         }
         self.load()
@@ -52,6 +57,8 @@ class PluginStorage:
             "pending",
             "reviewed",
             "verifications",
+            "seen_groups",
+            "group_notes",
             "ui_preferences",
         ):
             if not isinstance(raw.get(name, {}), dict):
@@ -96,6 +103,15 @@ class PluginStorage:
         for key, value in raw.get("ui_preferences", {}).items():
             if not isinstance(key, str) or not isinstance(value, str):
                 raise ValueError("界面偏好必须是字符串键值对象")
+        for key, item in raw.get("seen_groups", {}).items():
+            if not isinstance(key, str) or not isinstance(item, dict):
+                raise ValueError("群组记录必须是对象")
+            for field in ("platform_id", "group_openid", "last_seen"):
+                if not isinstance(item.get(field), str):
+                    raise ValueError(f"群组记录 {field} 必须是字符串")
+        for key, note in raw.get("group_notes", {}).items():
+            if not isinstance(key, str) or not isinstance(note, str):
+                raise ValueError("群备注必须是字符串键值对象")
 
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -174,6 +190,111 @@ class PluginStorage:
             self.data["ui_preferences"] = before
             raise
         return self.ui_preferences()
+
+    def seen_groups(self) -> list[dict[str, str]]:
+        groups = self.data.get("seen_groups")
+        if not isinstance(groups, dict):
+            return []
+        result: list[dict[str, str]] = []
+        for item in groups.values():
+            if not isinstance(item, dict):
+                continue
+            platform_id = str(item.get("platform_id") or "")
+            group_openid = str(item.get("group_openid") or "")
+            if not platform_id or not group_openid:
+                continue
+            result.append(
+                {
+                    "umo": f"{platform_id}:GroupMessage:{group_openid}",
+                    "platform_id": platform_id,
+                    "group_openid": group_openid,
+                    "last_seen": str(item.get("last_seen") or ""),
+                }
+            )
+        result.sort(key=lambda item: item["last_seen"], reverse=True)
+        return result
+
+    def remember_group(
+        self,
+        platform_id: str,
+        group_openid: str,
+        *,
+        now: datetime | None = None,
+    ) -> bool:
+        """Remember a group seen on a group message without storing its content.
+
+        A busy group updates ``last_seen`` at most once every five minutes so
+        ordinary chat does not write ``state.json`` on every message.
+        """
+        platform_id = str(platform_id or "").strip()
+        group_openid = str(group_openid or "").strip()
+        if not platform_id or not group_openid:
+            return False
+        seen = self.data.get("seen_groups")
+        if not isinstance(seen, dict):
+            seen = {}
+            self.data["seen_groups"] = seen
+        umo = f"{platform_id}:GroupMessage:{group_openid}"
+        current = now or datetime.now(timezone.utc)
+        previous = seen.get(umo)
+        if isinstance(previous, dict):
+            try:
+                last_seen = datetime.fromisoformat(str(previous.get("last_seen") or ""))
+                if last_seen.tzinfo is None:
+                    last_seen = last_seen.replace(tzinfo=timezone.utc)
+                if 0 <= (current - last_seen).total_seconds() < SEEN_GROUP_REFRESH_SECONDS:
+                    return False
+            except (TypeError, ValueError):
+                pass
+        before = dict(seen)
+        seen[umo] = {
+            "platform_id": platform_id,
+            "group_openid": group_openid,
+            "last_seen": current.isoformat(),
+        }
+        if len(seen) > SEEN_GROUP_LIMIT:
+            oldest = sorted(
+                seen,
+                key=lambda key: str(seen[key].get("last_seen") or ""),
+            )[: len(seen) - SEEN_GROUP_LIMIT]
+            for key in oldest:
+                seen.pop(key, None)
+        try:
+            self.save()
+        except Exception:
+            self.data["seen_groups"] = before
+            raise
+        return True
+
+    def group_note(self, umo: str) -> str:
+        notes = self.data.get("group_notes")
+        if not isinstance(notes, dict):
+            return ""
+        return str(notes.get(str(umo or "")) or "")
+
+    def set_group_note(self, umo: str, note: str) -> str:
+        umo = str(umo or "").strip()
+        note = str(note or "").strip()
+        if not umo:
+            return ""
+        notes = self.data.get("group_notes")
+        if not isinstance(notes, dict):
+            notes = {}
+            self.data["group_notes"] = notes
+        before = dict(notes)
+        previous = notes.get(umo)
+        if note:
+            notes[umo] = note
+        else:
+            notes.pop(umo, None)
+        if previous == (note or None):
+            return self.group_note(umo)
+        try:
+            self.save()
+        except Exception:
+            self.data["group_notes"] = before
+            raise
+        return self.group_note(umo)
 
     def set_group_feature_override(
         self,

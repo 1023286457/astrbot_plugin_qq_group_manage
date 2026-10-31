@@ -8,7 +8,7 @@ const modalRoot = document.getElementById("modal-root");
 const toastRoot = document.getElementById("toast-root");
 
 const PLUGIN_NAME = "astrbot_plugin_qq_group_manage";
-const PLUGIN_VERSION = "2.9.0";
+const PLUGIN_VERSION = "2.9.1";
 const TAB_IDS = ["overview", "pending", "verify", "groups", "settings", "data"];
 
 const TABS = [
@@ -97,6 +97,8 @@ const ICONS = {
   "list-filter": '<path d="M3 6h18"/><path d="M7 12h10"/><path d="M10 18h4"/>',
   palette:
     '<circle cx="13.5" cy="6.5" r=".8" fill="currentColor" stroke="none"/><circle cx="17.5" cy="10.5" r=".8" fill="currentColor" stroke="none"/><circle cx="8.5" cy="7.5" r=".8" fill="currentColor" stroke="none"/><circle cx="6.5" cy="12.5" r=".8" fill="currentColor" stroke="none"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/>',
+  pencil:
+    '<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
 };
 
 function icon(name, size = 18) {
@@ -1287,7 +1289,7 @@ function renderOverview() {
                 el(
                   "span",
                   { class: "mini-copy" },
-                  el("p", { class: "mini-title" }, group.label),
+                  el("p", { class: "mini-title" }, group.note || group.label),
                   el("p", { class: "mini-sub mono" }, group.umo),
                 ),
                 el(
@@ -1299,12 +1301,14 @@ function renderOverview() {
                       ? `${group.verification_count} 验证`
                       : group.profile?.exists
                         ? "已配置"
-                        : "继承全局",
+                        : group.last_seen
+                          ? formatTime(group.last_seen)
+                          : "继承全局",
                 ),
               ),
             ),
           )
-        : emptyInline("users", "暂无群组", "收到入群申请、验证或群管操作后会记录群组。"),
+        : emptyInline("users", "暂无群组", "群消息、入群申请、验证或群管操作后会记录群组。"),
     ),
   );
 
@@ -1978,6 +1982,7 @@ function renderGroupList() {
         {
           class: `group-item ${item.umo === state.selectedGroup ? "is-active" : ""}`,
           type: "button",
+          title: item.last_seen ? `最近活跃：${formatTime(item.last_seen)}` : item.umo,
           onClick: () => selectGroup(item.umo),
         },
         el(
@@ -1991,7 +1996,7 @@ function renderGroupList() {
           el(
             "span",
             { class: "group-item-title" },
-            el("span", {}, item.label),
+            el("span", {}, item.note || item.label),
             item.whitelisted ? null : el("span", { class: "tag is-warning" }, "白名单外"),
           ),
           el("p", { class: "group-item-sub" }, item.umo),
@@ -2087,13 +2092,22 @@ function renderGroupDetail() {
           el(
             "h2",
             { class: "detail-title" },
-            group.label,
+            group.note || group.label,
+            group.note ? el("span", { class: "tag is-info" }, "已备注") : null,
             profile.exists
               ? el("span", { class: "tag is-success" }, "分群配置")
               : el("span", { class: "tag" }, "继承全局"),
             profile.confirmed
               ? null
-              : el("span", { class: "tag is-warning" }, "未确认 UMO"),
+              : el(
+                  "span",
+                  {
+                    class: "tag is-warning",
+                    title:
+                      "旧版迁移时无法确认该 UMO 属于哪个真实群，因此暂不生效。请在群里发送「群管功能」取得真实 group_openid 后修正并确认。",
+                  },
+                  "未确认 UMO",
+                ),
             profile.duplicate
               ? el("span", { class: "tag is-danger" }, "重复 UMO")
               : null,
@@ -2110,7 +2124,7 @@ function renderGroupDetail() {
           "div",
           { class: "detail-actions" },
           button(
-            profile.exists ? "编辑分群配置" : "创建分群配置",
+            "编辑分群配置",
             {
               className: "btn-primary btn-sm",
               onClick: () => openGroupConfig(group),
@@ -2118,15 +2132,24 @@ function renderGroupDetail() {
             icon("settings", 13),
             el("span", {}, profile.exists ? "编辑分群配置" : "创建分群配置"),
           ),
+          button(
+            group.note ? "编辑备注" : "添加备注",
+            {
+              className: "btn btn-sm",
+              onClick: () => editGroupNote(group),
+            },
+            icon("pencil", 13),
+            el("span", {}, group.note ? "编辑备注" : "添加备注"),
+          ),
           profile.exists
             ? button(
-                "删除分群配置",
+                "恢复继承全局",
                 {
                   className: "btn-danger btn-sm",
-                  onClick: () => deleteGroupProfile(group),
+                  onClick: () => restoreGroupInheritance(group),
                 },
-                icon("trash", 13),
-                el("span", {}, "删除"),
+                icon("refresh-cw", 13),
+                el("span", {}, "恢复继承全局"),
               )
             : null,
         ),
@@ -2220,15 +2243,35 @@ function renderGroupDetail() {
         ),
         kvRow("群 OpenID", group.group_openid),
         kvRow("UMO", group.umo),
+        kvRow("备注", group.note || "未备注"),
         kvRow("配置来源", (group.sources || []).join(" / ") || "未知"),
+        kvRow("最近活跃", group.last_seen ? formatTime(group.last_seen) : "暂无消息记录"),
         kvRow("白名单", group.whitelisted ? "已包含" : "未包含"),
       ),
     ),
   );
 
+  const unconfirmedBanner =
+    profile.exists && profile.confirmed === false
+      ? el(
+          "div",
+          { class: "banner" },
+          icon("alert-triangle", 15),
+          el(
+            "div",
+            {},
+            el("strong", {}, "未确认 UMO 是什么？ "),
+            "这是旧版配置迁移时留下的临时标记：当时无法确认这个 UMO 属于哪个真实群，所以该分群配置暂时不生效。请在群里发送「群管功能」取得真实的 group_openid，到原生配置面板修正并勾选确认；或者点「恢复继承全局」删除这条未确认配置。",
+          ),
+        )
+      : null;
+
   container.replaceChildren(
-    header,
-    el("div", { class: "layout-2", style: "margin-top:0" }, el("div", { class: "stack" }, adminCard, featureCard), el("div", { class: "stack" }, infoCard)),
+    ...[
+      header,
+      unconfirmedBanner,
+      el("div", { class: "layout-2", style: "margin-top:0" }, el("div", { class: "stack" }, adminCard, featureCard), el("div", { class: "stack" }, infoCard)),
+    ].filter(Boolean),
   );
 }
 
@@ -2307,34 +2350,81 @@ async function removeAdmin(group, admin) {
   }
 }
 
-async function deleteGroupProfile(group) {
+async function restoreGroupInheritance(group) {
+  const display = group.note || group.label;
   const ok = await confirmAction(
-    "删除分群配置",
-    `确认删除 ${group.label} 的分群配置？删除后该群将继承全局配置，群管名单和运行数据不受影响。`,
-    { iconName: "trash", confirmText: "删除配置", danger: true },
+    "恢复继承全局配置",
+    `确认让 ${display} 恢复继承全局配置？这会删除该群的独立配置，群管名单、待审记录和验证记录不会删除。`,
+    { iconName: "refresh-cw", confirmText: "恢复继承", danger: true },
   );
   if (!ok) return;
   try {
     await apiPost("config/group/delete", { umo: group.umo });
-    toast("已删除分群配置");
-    await loadGroupDetail(group.umo);
+    toast("已恢复继承全局配置");
+    await refreshGroupData(group.umo);
   } catch (error) {
     toast(cleanError(error), "error");
   }
+}
+
+async function refreshGroupData(umo) {
+  try {
+    state.groups = await apiGet("groups");
+    if (state.tab === "groups") renderGroupList();
+  } catch {
+    /* 列表刷新失败时仍然刷新详情 */
+  }
+  if (state.tab === "groups" && umo) await loadGroupDetail(umo);
+}
+
+async function editGroupNote(group) {
+  const input = el("input", {
+    type: "text",
+    value: group.note || "",
+    maxlength: 120,
+    placeholder: "例如：123456789（QQ群号）或 天文社",
+    "aria-label": "群备注",
+  });
+  const body = el(
+    "div",
+    {},
+    el(
+      "p",
+      { class: "field-hint", style: "margin:0 0 8px" },
+      "备注只用于控制台显示，方便你记住这个 group_openid 对应哪个 QQ 群；不会改变 AstrBot 识别群的方式。",
+    ),
+    input,
+  );
+  const saved = await showModal({
+    title: group.note ? "编辑群备注" : "添加群备注",
+    description: "可以填 QQ 群号、群名或你能认出的任何标记；留空保存即可清除备注。",
+    iconName: "pencil",
+    confirmText: "保存备注",
+    body,
+    onConfirm: async () => {
+      const result = await apiPost("groups/note", {
+        umo: group.umo,
+        note: input.value.trim(),
+      });
+      toast(result?.message || "群备注已保存");
+      return true;
+    },
+  });
+  if (saved) await refreshGroupData(group.umo);
 }
 
 async function openGroupConfig(group) {
   if (!group.profile?.exists) {
     const ok = await confirmAction(
       "创建分群配置",
-      `将为 ${group.label} 创建独立配置，初始值复制当前全局配置。创建后该群不再跟随全局修改。`,
+      `将为 ${group.note || group.label} 创建独立配置，初始值复制当前全局配置。创建后该群不再跟随全局修改。`,
       { iconName: "settings", confirmText: "创建并编辑" },
     );
     if (!ok) return;
     try {
       await apiPost("config/group/create", { umo: group.umo });
       toast("已创建分群配置");
-      await loadGroupDetail(group.umo);
+      await refreshGroupData(group.umo);
     } catch (error) {
       toast(cleanError(error), "error");
       return;
@@ -2463,6 +2553,25 @@ function renderSettings() {
         { class: "scope-bar" },
         scopeSwitch,
         groupSelect,
+        state.configScope === "group" && data.profile?.exists
+          ? button(
+              "恢复继承全局",
+              {
+                className: "btn-danger btn-sm",
+                onClick: async () => {
+                  const group = {
+                    umo: state.selectedGroup,
+                    label: state.selectedGroup,
+                    note: "",
+                  };
+                  await restoreGroupInheritance(group);
+                  await reloadConfig();
+                },
+              },
+              icon("refresh-cw", 13),
+              el("span", {}, "恢复继承全局"),
+            )
+          : null,
         el(
           "span",
           { class: "muted", style: "margin-left:auto;font-size:10.5px" },

@@ -383,6 +383,8 @@ def format_group_admin_help(default_duration: str) -> str:
         "> 查看本群群管\n\n"
         "> `群管功能`  \n"
         "> 查看功能开关；点击蓝色状态填入切换指令，发送后生效\n\n"
+        "> `群绑定 群号 [群名]`  \n"
+        "> 把本群 group_openid 绑定到 QQ 群号备注，例如 `群绑定 123456789 天文社`；只影响控制台显示\n\n"
         "## 时间格式\n\n"
         "支持 `30秒`、`10分`、`2小时`、`1天2小时`  \n"
         "纯数字按分钟处理，例如 `30` 表示 **30分钟**\n\n"
@@ -467,7 +469,7 @@ def review_quote(event: AstrMessageEvent) -> set[str] | None:
     PLUGIN_NAME,
     "简单么么熊",
     "QQ 官方机器人群管理：禁言、入群申请审批、分群管理员与 LLM 工具",
-    "2.9.0",
+    "2.9.1",
 )
 class QQGroupAdminPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig) -> None:
@@ -1170,6 +1172,19 @@ class QQGroupAdminPlugin(Star):
             self._reviews_inflight.discard(request_key)
         return True
 
+    @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE, priority=0)
+    async def remember_group_activity(self, event: AstrMessageEvent) -> None:
+        """Remember group_openid for the WebUI group list; never stores content."""
+        if not self._is_qq_group(event):
+            return
+        try:
+            self.storage.remember_group(
+                event.get_platform_id(),
+                event.get_group_id(),
+            )
+        except Exception:
+            logger.exception("[%s] 记录群组活跃信息失败", PLUGIN_NAME)
+
     @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE, priority=200)
     async def join_verify_guard(self, event: AstrMessageEvent) -> None:
         # 先于违禁词和引用审批执行：未验证成员的消息只做验证处理。
@@ -1477,6 +1492,61 @@ class QQGroupAdminPlugin(Star):
             )
             return
         yield event.plain_result(f"已删除 {removed} 名本群群管。")
+
+    @filter.command("群绑定")
+    async def bind_group_note(
+        self,
+        event: AstrMessageEvent,
+        group_number: str = "",
+        group_name: str = "",
+    ) -> None:
+        """Bind the current group_openid to a human-readable QQ group number."""
+        if not self._is_qq_group(event):
+            yield event.plain_result("该指令仅支持 QQ 官方机器人群聊。")
+            return
+        if not self._event_feature_setting(event, "enable_group_admin_commands"):
+            yield event.plain_result("群管基础指令已关闭。")
+            return
+        if not self._can_manage(event):
+            yield event.plain_result("你没有本群群管权限。")
+            return
+
+        number = str(group_number or "").strip()
+        name = str(group_name or "").strip()
+        # Preserve spaces in the optional group name. AstrBot's command parser
+        # only hands us the first token, so read the original text as a fallback.
+        raw = event.get_message_str().strip()
+        raw = re.sub(r"^.*?群绑定(?:\s+|$)", "", raw, count=1).strip()
+        if raw:
+            parts = raw.split(maxsplit=1)
+            if parts and re.fullmatch(r"\d{5,12}", parts[0]):
+                number = parts[0]
+                name = parts[1].strip() if len(parts) > 1 else ""
+
+        if not re.fullmatch(r"\d{5,12}", number):
+            yield event.plain_result(
+                "用法：群绑定 群号 [群名]\n例如：群绑定 123456789 天文社\n"
+                "群号只用于控制台备注，不会改变 AstrBot 的 group_openid。"
+            )
+            return
+        note = f"{number} {name}".strip()
+        if len(note) > 120:
+            yield event.plain_result("群备注不能超过 120 个字符。")
+            return
+        umo = self._event_group_umo(event)
+        try:
+            saved = self.storage.set_group_note(umo, note)
+        except OSError:
+            logger.exception("[%s] 保存群备注失败", PLUGIN_NAME)
+            yield event.plain_result(
+                "群备注保存失败，本次修改未生效，请检查存储权限和磁盘空间。"
+            )
+            return
+        yield event.plain_result(
+            f"已绑定本群备注：{saved}\n\n"
+            f"群 UMO：{umo}\n"
+            "可在 WebUI → 群组 中查看；备注仅用于显示，不改变群身份。"
+        )
 
     @filter.command("群管列表")
     async def list_group_admins(self, event: AstrMessageEvent) -> None:

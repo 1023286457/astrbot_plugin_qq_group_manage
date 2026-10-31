@@ -43,7 +43,7 @@ except Exception as exc:  # pragma: no cover - 仅在旧的 AstrBot 上触发
 
 PLUGIN_NAME = "astrbot_plugin_qq_group_manage"
 PLUGIN_DISPLAY_NAME = "QQ官机群管"
-PLUGIN_VERSION = "2.9.0"
+PLUGIN_VERSION = "2.9.1"
 QQ_PLATFORMS = {"qq_official", "qq_official_webhook"}
 VIEW_NAME = "console"
 SECTION_ORDER = (
@@ -196,6 +196,7 @@ class DashboardAPI:
             ("groups", self.get_groups, ["GET"], "群组列表"),
             ("groups/detail", self.get_group_detail, ["GET"], "群组详情"),
             ("groups/admins", self.update_group_admins, ["POST"], "维护群管名单"),
+            ("groups/note", self.update_group_note, ["POST"], "保存群备注"),
             ("config", self.get_config, ["GET"], "读取插件配置"),
             ("config/save", self.save_config, ["POST"], "保存插件配置"),
             (
@@ -208,7 +209,7 @@ class DashboardAPI:
                 "config/group/delete",
                 self.delete_group_profile,
                 ["POST"],
-                "删除分群配置",
+                "恢复继承全局配置",
             ),
             ("ui/preferences", self.get_ui_preferences, ["GET"], "读取界面偏好"),
             (
@@ -391,6 +392,23 @@ class DashboardAPI:
             if item is not None:
                 item["verification_count"] += 1
 
+        try:
+            seen_groups = storage.seen_groups()
+        except Exception:
+            seen_groups = []
+        for entry in seen_groups:
+            if not isinstance(entry, dict):
+                continue
+            platform_id = str(entry.get("platform_id") or "")
+            group_openid = str(entry.get("group_openid") or "")
+            last_seen = str(entry.get("last_seen") or "")
+            if not platform_id or not group_openid:
+                continue
+            umo = self._group_umo(platform_id, group_openid)
+            item = add(umo, platform_id, "seen", group_openid=group_openid)
+            if item is not None and last_seen:
+                item["last_seen"] = max(str(item.get("last_seen") or ""), last_seen)
+
         # 群管名单只记录 group_openid；只有一个 QQ 平台时可以安全补全 UMO。
         platforms = self._platforms()
         if len(platforms) == 1:
@@ -437,6 +455,8 @@ class DashboardAPI:
             "verification_count": int(item.get("verification_count", 0)),
             "platform_online": platform is not None,
             "whitelisted": bool(self.plugin._umo_enabled(umo)),
+            "last_seen": str(item.get("last_seen") or ""),
+            "note": self.plugin.storage.group_note(umo),
             "sources": item.get("sources", []),
         }
 
@@ -792,7 +812,11 @@ class DashboardAPI:
             if not profile["exists"]:
                 warnings.append("该群还没有分群配置，当前显示并继承全局配置。")
             elif not profile["confirmed"]:
-                warnings.append("该群配置尚未确认 UMO，保存前请先在插件配置中确认。")
+                warnings.append(
+                    "未确认 UMO：这是旧版配置迁移留下的记录。迁移时无法确定它属于哪个真实群，"
+                    "所以暂时不会生效。请在群里发送「群管功能」取得真实 group_openid，"
+                    "到插件配置面板修正并勾选确认；或恢复继承全局配置。"
+                )
             if not per_group:
                 warnings.append("分群功能管理当前已关闭，分群配置不会生效。")
         return {
@@ -985,7 +1009,8 @@ class DashboardAPI:
             data.setdefault("groups", []).append(profile)
         elif not profile.get("confirmed", True):
             raise DashboardError(
-                "该群配置尚未确认 UMO，请先在插件配置面板确认后再编辑",
+                "该群配置尚未确认 UMO。它来自旧版迁移，可能不是目标群的 group_openid；"
+                "请先在插件配置面板修正并确认，或恢复继承全局配置",
                 status_code=409,
             )
         for key, value in updates.items():
@@ -1341,6 +1366,28 @@ class DashboardAPI:
         except Exception as exc:
             return self._error(exc, "更新群管名单失败")
 
+    async def update_group_note(self) -> Any:
+        try:
+            payload = await request.json(default={})
+            if not isinstance(payload, dict):
+                raise DashboardError("请求体格式不正确")
+            umo = str(payload.get("umo") or "").strip()
+            note = str(payload.get("note") or "").strip()
+            if not valid_group_umo(umo):
+                raise DashboardError("群 UMO 格式不正确")
+            if len(note) > 120:
+                raise DashboardError("群备注不能超过 120 个字符")
+            saved = self.plugin.storage.set_group_note(umo, note)
+            return json_response(
+                {
+                    "ok": True,
+                    "note": saved,
+                    "message": "群备注已保存" if saved else "群备注已清除",
+                }
+            )
+        except Exception as exc:
+            return self._error(exc, "保存群备注失败")
+
     # ------------------------------------------------------------------
     # Handler: 配置
     # ------------------------------------------------------------------
@@ -1460,7 +1507,7 @@ class DashboardAPI:
             return json_response(
                 {
                     "ok": True,
-                    "message": "已删除分群配置，该群将继承全局配置",
+                    "message": "已恢复继承全局配置",
                     "config": self._config_response(umo),
                 }
             )

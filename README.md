@@ -6,7 +6,7 @@
 
 **在群里发一句话，就能完成禁言、审批、验证和风控的 AstrBot 插件**
 
-[![版本 2.9.0](https://img.shields.io/badge/版本-2.9.0-89b4fa.svg)](CHANGELOG.md)
+[![版本 2.9.1](https://img.shields.io/badge/版本-2.9.1-89b4fa.svg)](CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-a3be8c.svg)](LICENSE)
 [![作者 简单么么熊](https://img.shields.io/badge/作者-简单么么熊-f5b7c7.svg)](https://github.com/1023286457)
 [![QQ群 1033011763](https://img.shields.io/badge/QQ群-1033011763-12B7F5.svg)](https://qm.qq.com/q/JAq27UUlkO)
@@ -53,13 +53,15 @@ QQ 官方机器人能做的群管理动作有限，插件把这部分能力整�
 | 总览 | 待审申请、验证队列、群组数量、插件群管、功能开关与运行状态 |
 | 入群审批 | 查看申请资料与问答，直接同意或拒绝；拒绝可填写理由 |
 | 进群验证 | 查看题目、答错次数与剩余时间，放行或重新出题 |
-| 群组 | 查看群 UMO、配置来源、群管名单；添加/移除插件群管 |
-| 配置 | 编辑全局或分群配置，支持开关、词表、题库、模板与安全限制 |
+| 群组 | 查看群 UMO、配置来源、群管名单；添加/移除插件群管。群里发过消息、出现过申请/验证或已有配置的群都会自动记录；群 ID 是 QQ 官方机器人的 `group_openid`，不是 QQ 群号；可为每个群添加备注（可填 QQ 群号） |
+| 配置 | 编辑全局或分群配置，支持开关、词表、题库、模板与安全限制；删除分群配置的入口名称为「恢复继承全局」 |
 | 数据 | 导出 `state.json` 和配置快照，查看视图与运行信息 |
 
 视图只在已登录的 AstrBot Dashboard 中通过受限 iframe 加载，所有操作经 bridge 转发到插件后端，并复用 Dashboard 会话鉴权。视图里的审批、放行和禁言解除会直接调用 QQ 接口，操作前请确认群与成员。
 
 右上角的**调色盘**可以更改控制台主色：支持 6 个预设色和自定义取色。主题色只影响这个控制台，不会修改 AstrBot 其他页面；保存后写入插件数据目录的 `state.json`，下次打开自动恢复。
+
+群备注除了在群组页点「添加备注」外，也可以直接在群里发 `群绑定 群号 [群名]`，例如 `群绑定 123456789 天文社`。备注只用于显示，底层群身份始终是 `group_openid`。
 
 ---
 
@@ -134,6 +136,7 @@ https://github.com/1023286457/astrbot_plugin_qq_group_manage
 | `禁言状态` | 查看全员禁言规则与当前被禁言的成员 |
 | `添加群管 @用户` / `删除群管 @用户` | 维护本群插件群管名单 |
 | `群管列表` / `群管帮助` | 查看群管名单、可用指令 |
+| `群绑定 群号 [群名]` | 把本群 `group_openid` 绑定到 QQ 群号备注，例如 `群绑定 123456789 天文社` |
 | `群管功能` | 查看并调整本群功能开关，点状态即填入修改指令 |
 | `验证列表` / `验证放行 @用户` / `重新验证 @用户` | 进群验证管理，详见[进群验证](#verify) |
 
@@ -360,8 +363,10 @@ QQ 的[撤回接口](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_gro
 - **关闭分群**：只显示全局配置，各群统一使用。已有的群条目会保留，不会丢。
 - **开启分群**：显示 UMO 列表，每个条目可单独设置群管权限、指令、申请审批、成员通知、LLM 工具、安全限制和完整关键词规则。关闭某个关键词功能时，对应词表和时长只是收起，内容不删除。
 - **群内首次修改**：自动创建当前群的 UMO 条目，复制当时的全局配置，再叠加本次修改。之后该群走独立配置。
-- **面板手动新增**：模板用插件默认值，请填真实群 UMO 并逐项核对后保存。没有建条目的群继续使用全局配置；删除条目即恢复这个行为。
-- **群身份格式**：`平台ID:GroupMessage:真实群ID`，与发送者无关。开启 AstrBot 独立会话也不会把群配置存到用户名下。群管发 `群管功能` 可查看本群 UMO；群白名单同样填这个 UMO，不要填独立会话下 `sid` 返回的用户 UMO。
+- **面板手动新增**：模板用插件默认值，请填真实群 UMO 并逐项核对后保存。没有建条目的群继续使用全局配置；删除条目即恢复该群继承全局配置。
+- **群备注**：群组页可以给 `group_openid` 添加备注，例如 QQ 群号或群名。备注只用于显示，不会改变 UMO 或 AstrBot 的群识别。
+- **未确认 UMO**：旧版迁移时无法确认某条 UMO 属于哪个真实群，会把它标为“未确认”并暂不生效。请在真实群发 `群管功能` 取得 `group_openid`，修正 UMO 并勾选确认；不需要这条配置时用「恢复继承全局」。
+- **群身份格式**：`平台ID:GroupMessage:group_openid`，与发送者无关。QQ 官方机器人返回的群 ID 是 `group_openid`，不是 QQ 群号；请直接复制 `群管功能` 或控制台群组页显示的 UMO，不要替换成群号。开启 AstrBot 独立会话也不会把群配置存到用户名下。群白名单同样填这个 UMO，不要填独立会话下 `sid` 返回的用户 UMO。
 - **面板同步**：群内改动立即写入插件配置文件，重新打开面板就能看到。已经打开的表单不会自动刷新——群内改完请先重新打开面板再编辑，避免旧表单覆盖新值。面板保存后由 AstrBot 重载插件生效。
 - **控制台配置页**：WebUI 的「群管控制台 → 配置」与原生配置面板读写同一份配置；控制台保存后立即生效，不需要再回原生面板。分群配置条目也可以在这里创建、编辑和删除。
 
@@ -391,6 +396,8 @@ QQ 的[撤回接口](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_gro
 | --- | --- |
 | 群管名单、待审映射、验证记录 | `data/plugin_data/astrbot_plugin_qq_group_manage/state.json` |
 | 控制台主题色偏好 | `data/plugin_data/astrbot_plugin_qq_group_manage/state.json` 的 `ui_preferences` |
+| 自动记录的群组 | `data/plugin_data/astrbot_plugin_qq_group_manage/state.json` 的 `seen_groups` |
+| 群备注 | `data/plugin_data/astrbot_plugin_qq_group_manage/state.json` 的 `group_notes` |
 | 群配置与词表 | AstrBot 插件配置文件的 `group_management.groups` |
 | 全局设置 | AstrBot 插件配置文件的 `group_management.global_settings` |
 
