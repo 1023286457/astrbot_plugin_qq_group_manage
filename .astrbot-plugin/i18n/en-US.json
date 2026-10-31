@@ -1,0 +1,17 @@
+{
+  "metadata": {
+    "display_name": "QQ Group Manager"
+  },
+  "views": {
+    "console": {
+      "title": "Group Console",
+      "description": "Review join requests and verification, inspect groups and admins, and edit plugin settings."
+    }
+  },
+  "pages": {
+    "console": {
+      "title": "Group Console",
+      "description": "Review join requests and verification, inspect groups and admins, and edit plugin settings."
+    }
+  }
+}
