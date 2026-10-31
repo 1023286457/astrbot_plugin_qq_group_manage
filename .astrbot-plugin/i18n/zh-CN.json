@@ -1,0 +1,17 @@
+      {
+  "metadata": {
+    "display_name": "QQ官机群管"
+  },
+  "views": {
+    "console": {
+      "title": "群管控制台",
+      "description": "查看入群审批、进群验证、群组与群管名单，并直接编辑插件配置。"
+    }
+  },
+  "pages": {
+    "console": {
+      "title": "群管控制台",
+      "description": "查看入群审批、进群验证、群组与群管名单，并直接编辑插件配置。"
+    }
+  }
+}
