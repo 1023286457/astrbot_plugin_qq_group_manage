@@ -6,7 +6,7 @@
 
 **在群里发一句话，就能完成禁言、审批、验证和风控的 AstrBot 插件**
 
-[![版本 2.9.1](https://img.shields.io/badge/版本-2.9.1-89b4fa.svg)](CHANGELOG.md)
+[![版本 2.9.2](https://img.shields.io/badge/版本-2.9.2-89b4fa.svg)](CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-a3be8c.svg)](LICENSE)
 [![作者 简单么么熊](https://img.shields.io/badge/作者-简单么么熊-f5b7c7.svg)](https://github.com/1023286457)
 [![QQ群 1033011763](https://img.shields.io/badge/QQ群-1033011763-12B7F5.svg)](https://qm.qq.com/q/JAq27UUlkO)
@@ -198,7 +198,7 @@ https://github.com/1023286457/astrbot_plugin_qq_group_manage
 
 在面板「⑨ 进群验证」里开启，或由有权限的群管发送 `群管功能 进群验证 开启`。默认关闭，开启前已经在群里的成员不受影响。
 
-新成员入群后，原有欢迎通知照常发送，机器人再单独发一道题：
+新成员入群后，原有欢迎通知照常发送，机器人再单独发一道题。出题前会先调用 QQ 的 `bot_state` 查询机器人在本群的角色：**只有机器人是群主或管理员时才自动出题**；确认机器人只是普通成员时会跳过。该接口是白名单接口，拿不到角色时无法判断，插件会保留兼容行为继续出题，并在日志中提示。
 
 | 题型 | 怎么作答 |
 | --- | --- |
@@ -230,7 +230,7 @@ https://github.com/1023286457/astrbot_plugin_qq_group_manage
 
 ### 依赖条件
 
-1. 机器人是群管理员，否则无法撤回消息、无法禁言。撤回只对 **2 分钟内** 普通成员的消息有效。
+1. 机器人是群管理员，否则无法撤回消息、无法禁言；插件会在出题前检查 `bot_state`，确认不是管理员时跳过自动出题。撤回只对 **2 分钟内** 普通成员的消息有效。
 2. 机器人必须收到群内全部消息，只收 @ 消息时发现不了未验证成员的发言。
 3. 算术题按钮依赖自定义 Markdown 与按钮权限，Webhook 需订阅 `INTERACTION_CREATE`。按钮发不出去时题目降级为纯文本，改为直接回复答案数字。
 4. QQ 不允许用进群事件被动回复，题目按主动消息发送，会占用每群每日主动消息额度。

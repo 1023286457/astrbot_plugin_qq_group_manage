@@ -34,6 +34,8 @@ from .join_verify import (
 REMIND_COOLDOWN = 30
 SCAN_INTERVAL = 30
 API_TIMEOUT = 10
+BOT_STATE_TIMEOUT = 3
+BOT_ROLE_CACHE_SECONDS = 60
 PASSED_TEXT = "验证通过，欢迎加入！"
 
 
@@ -43,6 +45,8 @@ class JoinVerifier:
         # 同一成员的作答、超时、放行和重新验证都在这把锁内串行执行，
         # 进锁后重新读取记录，保证状态变更与禁言、解禁的先后顺序一致。
         self._locks: dict[tuple[str, str, str], asyncio.Lock] = {}
+        self._bot_roles: dict[tuple[str, str], tuple[float, bool | None]] = {}
+        self._bot_role_warned: set[tuple[str, str]] = set()
 
     @property
     def storage(self) -> Any:
@@ -143,6 +147,15 @@ class JoinVerifier:
         调用方必须持有该成员的锁，且记录仍是存储中的有效记录。
         """
         umo = self.plugin._group_umo(record["platform_id"], record["group_openid"])
+        allowed = await self.bot_role_allows_verification(
+            record["platform_id"], record["group_openid"]
+        )
+        if allowed is False:
+            logger.warning(
+                "[进群验证] 机器人不是群管理员，取消发送验证题：%s",
+                record["group_openid"],
+            )
+            return False
         template = (
             f"{{member_at}} {intro}\n\n{{question}}\n\n{{rules}}"
             if intro
@@ -289,6 +302,55 @@ class JoinVerifier:
 
     # ---------- 事件入口 ----------
 
+    async def bot_role_allows_verification(
+        self, platform_id: str, group: str
+    ) -> bool | None:
+        """Return whether the bot can moderate; None means the role is unknown.
+
+        ``bot_state`` is a QQ whitelist endpoint. When it is unavailable we
+        return None and keep the previous permissive behavior so verification
+        does not stop working for every bot without that permission.
+        """
+        key = (platform_id, group)
+        now = time.time()
+        cached = self._bot_roles.get(key)
+        if cached is not None and now - cached[0] < BOT_ROLE_CACHE_SECONDS:
+            return cached[1]
+        platform = self.plugin.context.get_platform_inst(platform_id)
+        if platform is None:
+            return None
+        api = QQGroupManageAPI(platform.client)
+        try:
+            state = await asyncio.wait_for(
+                api.get_bot_state(group),
+                BOT_STATE_TIMEOUT,
+            )
+        except Exception as exc:
+            self._bot_roles[key] = (now, None)
+            if key not in self._bot_role_warned:
+                self._bot_role_warned.add(key)
+                logger.warning(
+                    "[进群验证] 无法确认机器人群内角色，按兼容模式继续：%r",
+                    exc,
+                )
+            return None
+        role = str((state or {}).get("member_role") or "").strip().lower()
+        allowed: bool | None
+        if role in {"owner", "admin"}:
+            allowed = True
+        elif role == "member":
+            allowed = False
+        else:
+            allowed = None
+        self._bot_roles[key] = (now, allowed)
+        if allowed is False and key not in self._bot_role_warned:
+            self._bot_role_warned.add(key)
+            logger.warning(
+                "[进群验证] 机器人在群 %s 的角色是普通成员，已跳过进群验证出题",
+                group,
+            )
+        return allowed
+
     async def prepare(self, platform_id: str, item: dict[str, Any]) -> dict[str, Any] | None:
         """进群后先登记待验证，欢迎消息发送期间也能拦截发言；题目由 deliver 发送。"""
         group = str(item.get("group_openid") or "")
@@ -297,6 +359,9 @@ class JoinVerifier:
             return None
         try:
             if not await self.enabled(self.plugin._group_umo(platform_id, group)):
+                return None
+            allowed = await self.bot_role_allows_verification(platform_id, group)
+            if allowed is False:
                 return None
             async with self._lock((platform_id, group, member)):
                 # 重复推送的进群事件不重新出题。

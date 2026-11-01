@@ -85,6 +85,11 @@ class QQGroupManageAPI:
         member_id = quote(member_openid, safe="")
         return await self._request("GET", f"/v2/groups/{group_id}/members/{member_id}")
 
+    async def get_bot_state(self, group_openid: str) -> Any:
+        """Query the bot's own role in a group (bot_state, whitelist-only)."""
+        group_id = quote(group_openid, safe="")
+        return await self._request("GET", f"/v2/groups/{group_id}/bot_state")
+
     async def list_join_requests(
         self,
         group_openid: str,
