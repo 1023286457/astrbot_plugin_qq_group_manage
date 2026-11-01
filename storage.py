@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import shutil
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -10,6 +12,16 @@ from astrbot.api import logger
 
 SEEN_GROUP_REFRESH_SECONDS = 5 * 60
 SEEN_GROUP_LIMIT = 1000
+STATE_KEYS = (
+    "group_admins",
+    "group_feature_overrides",
+    "pending",
+    "reviewed",
+    "verifications",
+    "seen_groups",
+    "group_notes",
+    "ui_preferences",
+)
 
 
 class PluginStorage:
@@ -494,3 +506,79 @@ class PluginStorage:
         # 进群验证记录不在这里清理：只在验证通过、退群或管理员处理时删除。
         if removed and save:
             self.save()
+
+    # ---------- 安全导入 ----------
+
+    @staticmethod
+    def _import_body(raw: Any) -> dict[str, Any]:
+        if isinstance(raw, dict) and isinstance(raw.get("data"), dict):
+            raw = raw["data"]
+        if not isinstance(raw, dict):
+            raise ValueError("运行数据快照根节点必须是对象")
+        schema = raw.get("schema_version")
+        if schema is not None and (not isinstance(schema, int) or schema > 1):
+            raise ValueError("运行数据快照版本高于当前插件支持的版本")
+        PluginStorage._validate(raw)
+        return raw
+
+    @staticmethod
+    def state_preview(raw: Any) -> dict[str, Any]:
+        data = PluginStorage._import_body(raw)
+        admins = data.get("group_admins", {})
+        pending = data.get("pending", {})
+        verifications = data.get("verifications", {})
+        seen = data.get("seen_groups", {})
+        notes = data.get("group_notes", {})
+        prefs = data.get("ui_preferences", {})
+        return {
+            "kind": "state",
+            "admin_groups": len(admins),
+            "admin_members": sum(len(items) for items in admins.values()),
+            "pending": len(pending),
+            "verifications": len(verifications),
+            "seen_groups": len(seen),
+            "group_notes": len(notes),
+            "ui_preferences": len(prefs),
+        }
+
+    def import_state(self, raw: Any, mode: str) -> dict[str, Any]:
+        data = self._import_body(raw)
+        if mode not in {"merge", "replace"}:
+            raise ValueError("导入模式只能是 merge 或 replace")
+        before = deepcopy(self.data)
+        candidate = deepcopy(self.data)
+        if mode == "replace":
+            candidate = {key: deepcopy(data.get(key, {})) for key in STATE_KEYS}
+        else:
+            for key in STATE_KEYS:
+                incoming = data.get(key, {})
+                if not isinstance(incoming, dict):
+                    continue
+                if key == "group_admins":
+                    for group, members in incoming.items():
+                        existing = candidate[key].setdefault(group, [])
+                        for member in members:
+                            if member not in existing:
+                                existing.append(member)
+                elif key == "group_feature_overrides":
+                    for group, overrides in incoming.items():
+                        current = candidate[key].setdefault(group, {})
+                        current.update(overrides)
+                else:
+                    candidate[key].update(deepcopy(incoming))
+        backup_path = self.path.with_name(
+            f"{self.path.stem}.bak-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}.json"
+        )
+        if self.path.exists():
+            shutil.copy2(self.path, backup_path)
+        self.data = candidate
+        try:
+            self.prune(save=False)
+            self.save()
+        except Exception:
+            self.data = before
+            raise
+        summary = self.state_preview(data)
+        summary.update({"ok": True, "mode": mode, "backup": str(backup_path)})
+        return summary
+

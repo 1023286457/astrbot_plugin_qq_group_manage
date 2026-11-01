@@ -8,7 +8,7 @@ const modalRoot = document.getElementById("modal-root");
 const toastRoot = document.getElementById("toast-root");
 
 const PLUGIN_NAME = "astrbot_plugin_qq_group_manage";
-const PLUGIN_VERSION = "2.9.2";
+const PLUGIN_VERSION = "2.9.3";
 const TAB_IDS = ["overview", "pending", "verify", "groups", "settings", "data"];
 
 const TABS = [
@@ -99,6 +99,8 @@ const ICONS = {
     '<circle cx="13.5" cy="6.5" r=".8" fill="currentColor" stroke="none"/><circle cx="17.5" cy="10.5" r=".8" fill="currentColor" stroke="none"/><circle cx="8.5" cy="7.5" r=".8" fill="currentColor" stroke="none"/><circle cx="6.5" cy="12.5" r=".8" fill="currentColor" stroke="none"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/>',
   pencil:
     '<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
+  upload:
+    '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/>',
 };
 
 function icon(name, size = 18) {
@@ -3046,6 +3048,22 @@ function renderData() {
       "导出配置 JSON",
       () => downloadConfig(),
     ),
+    dataCard(
+      "upload",
+      "安全导入运行数据",
+      "导入 state.json 前会先校验结构、显示影响范围，并自动备份当前运行数据；可选择合并或覆盖。",
+      "选择 state.json",
+      () => pickStateImport(),
+      "upload",
+    ),
+    dataCard(
+      "upload",
+      "安全导入配置快照",
+      "导入插件配置前会校验布局版本和分群 UMO，并自动备份当前配置；不会接受不匹配的快照。",
+      "选择配置 JSON",
+      () => pickConfigImport(),
+      "upload",
+    ),
     el(
       "section",
       { class: "data-card" },
@@ -3096,14 +3114,14 @@ function renderData() {
   );
 }
 
-function dataCard(iconName, title, description, actionLabel, action) {
+function dataCard(iconName, title, description, actionLabel, action, actionIcon = "download") {
   return el(
     "section",
     { class: "data-card" },
     el("div", { class: "data-card-icon" }, icon(iconName, 19)),
     el("h3", {}, title),
     el("p", {}, description),
-    button(actionLabel, { className: "btn", onClick: action }, icon("download", 14), el("span", {}, actionLabel)),
+    button(actionLabel, { className: "btn", onClick: action }, icon(actionIcon, 14), el("span", {}, actionLabel)),
   );
 }
 
@@ -3138,6 +3156,107 @@ async function downloadConfig() {
   } catch (error) {
     toast(cleanError(error), "error");
   }
+}
+
+function pickStateImport() {
+  pickImportFile("state");
+}
+
+function pickConfigImport() {
+  pickImportFile("config");
+}
+
+function pickImportFile(kind) {
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = ".json,application/json";
+  input.style.display = "none";
+  input.addEventListener("change", async () => {
+    const file = input.files?.[0];
+    input.remove();
+    if (!file) return;
+    try {
+      const data = JSON.parse(await file.text());
+      const preview = await apiPost("import/preview", { kind, data });
+      openImportConfirm(kind, data, preview?.preview || {});
+    } catch (error) {
+      toast(cleanError(error), "error");
+    }
+  });
+  document.body.appendChild(input);
+  input.click();
+}
+
+function importSummary(kind, preview) {
+  if (kind === "state") {
+    return [
+      `群管名单：${preview.admin_groups || 0} 个群 / ${preview.admin_members || 0} 人`,
+      `待审申请：${preview.pending || 0} 条`,
+      `进群验证：${preview.verifications || 0} 条`,
+      `已记录群组：${preview.seen_groups || 0} 个`,
+      `群备注：${preview.group_notes || 0} 条`,
+      `界面偏好：${preview.ui_preferences || 0} 项`,
+    ];
+  }
+  return [
+    `快照版本：${preview.version || "未标注"}`,
+    `分群配置：${preview.groups || 0} 个`,
+    `全局配置段：${preview.global_settings || 0} 项`,
+    `作用域配置：${preview.scope_keys || 0} 项`,
+    `导出时间：${preview.exported_at || "未标注"}`,
+  ];
+}
+
+async function openImportConfirm(kind, data, preview) {
+  const modeName = `import-mode-${Date.now()}`;
+  const merge = el("input", {
+    type: "radio",
+    name: modeName,
+    value: "merge",
+    checked: true,
+  });
+  const replace = el("input", {
+    type: "radio",
+    name: modeName,
+    value: "replace",
+  });
+  const body = el(
+    "div",
+    {},
+    el(
+      "div",
+      { class: "banner is-warning", style: "margin:0 0 12px" },
+      icon("alert-triangle", 15),
+      el(
+        "div",
+        {},
+        "导入前会自动备份当前数据。覆盖模式会用快照替换对应的现有记录，请确认这是你要的效果。",
+      ),
+    ),
+    el("div", { class: "kv-list", style: "margin-bottom:12px" }, ...importSummary(kind, preview).map((line) => kvRow(line.split("：")[0], line.split("：").slice(1).join("：")))),
+    el("label", { class: "field", style: "display:flex;gap:8px;align-items:flex-start;margin-bottom:8px" }, merge, el("span", {}, "合并：保留当前记录，快照补充/更新同名项")),
+    el("label", { class: "field", style: "display:flex;gap:8px;align-items:flex-start" }, replace, el("span", {}, "覆盖：用快照替换现有运行数据/分群配置")),
+  );
+  const result = await showModal({
+    title: kind === "state" ? "导入运行数据" : "导入插件配置",
+    description: "请选择导入模式；完成后视图会自动刷新。",
+    iconName: "upload",
+    confirmText: "确认导入",
+    body,
+    onConfirm: async () => {
+      const selected = body.querySelector(`input[name="${modeName}"]:checked`);
+      const mode = selected?.value === "replace" ? "replace" : "merge";
+      const endpoint = kind === "state" ? "import/state" : "import/config";
+      const res = await apiPost(endpoint, { data, mode });
+      toast(
+        `导入完成${res?.backup ? `，已备份到 ${res.backup}` : ""}`,
+        "success",
+      );
+      window.setTimeout(() => window.location.reload(), 800);
+      return true;
+    },
+  });
+  return result;
 }
 
 /* ------------------------------------------------------------------ */

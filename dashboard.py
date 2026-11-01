@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import json
 import re
 from copy import deepcopy
 from datetime import datetime, timezone
@@ -43,7 +44,7 @@ except Exception as exc:  # pragma: no cover - 仅在旧的 AstrBot 上触发
 
 PLUGIN_NAME = "astrbot_plugin_qq_group_manage"
 PLUGIN_DISPLAY_NAME = "QQ官机群管"
-PLUGIN_VERSION = "2.9.2"
+PLUGIN_VERSION = "2.9.3"
 QQ_PLATFORMS = {"qq_official", "qq_official_webhook"}
 VIEW_NAME = "console"
 SECTION_ORDER = (
@@ -220,6 +221,9 @@ class DashboardAPI:
             ),
             ("export/state", self.export_state, ["GET"], "导出运行数据"),
             ("export/config", self.export_config, ["GET"], "导出插件配置"),
+            ("import/preview", self.import_preview, ["POST"], "预览安全导入"),
+            ("import/state", self.import_state, ["POST"], "导入运行数据"),
+            ("import/config", self.import_config, ["POST"], "导入插件配置"),
         )
         for route, handler, methods, desc in routes:
             register(f"{prefix}{route}", handler, methods, desc)
@@ -1546,6 +1550,172 @@ class DashboardAPI:
             )
         except Exception as exc:
             return self._error(exc, "保存界面偏好失败")
+
+    # ------------------------------------------------------------------
+    # Handler: 安全导入
+    # ------------------------------------------------------------------
+    def _config_import_data(self, raw: Any) -> dict[str, Any]:
+        if not isinstance(raw, dict) or str(raw.get("plugin") or "") != PLUGIN_NAME:
+            raise DashboardError("这不是本插件的配置快照")
+        config = raw.get("config")
+        if not isinstance(config, dict):
+            raise DashboardError("配置快照缺少 config 对象")
+        layout = config.get("config_layout_version", 0)
+        if not isinstance(layout, int) or layout < 2:
+            raise DashboardError("配置快照不是新版分群布局，无法安全导入")
+        current_layout = int(
+            getattr(self.plugin, "config", {}).get("config_layout_version", 0) or 0
+        )
+        if layout != current_layout:
+            raise DashboardError("配置布局版本不一致，请先升级/重载插件再导入")
+        management = config.get("group_management", {})
+        if not isinstance(management, dict):
+            raise DashboardError("配置快照的 group_management 必须是对象")
+        if not isinstance(management.get("global_settings", {}), dict):
+            raise DashboardError("global_settings 必须是对象")
+        groups = management.get("groups", [])
+        if not isinstance(groups, list):
+            raise DashboardError("分群配置必须是列表")
+        seen: set[str] = set()
+        for item in groups:
+            if not isinstance(item, dict) or not valid_group_umo(
+                str(item.get("umo") or "")
+            ):
+                raise DashboardError("分群配置中存在无效的群 UMO")
+            umo = str(item["umo"])
+            if umo in seen:
+                raise DashboardError(f"分群配置中存在重复 UMO：{umo}")
+            seen.add(umo)
+        scope = config.get("scope_settings", {})
+        if not isinstance(scope, dict):
+            raise DashboardError("scope_settings 必须是对象")
+        return config
+
+    def _config_import_preview(self, raw: Any) -> dict[str, Any]:
+        config = self._config_import_data(raw)
+        management = config.get("group_management", {})
+        groups = management.get("groups", [])
+        return {
+            "kind": "config",
+            "version": str(raw.get("version") or ""),
+            "exported_at": str(raw.get("exported_at") or ""),
+            "groups": len(groups),
+            "global_settings": len(management.get("global_settings", {})),
+            "scope_keys": len(config.get("scope_settings", {})),
+        }
+
+    def _apply_config_import(self, config: dict[str, Any], mode: str) -> dict[str, Any]:
+        if mode not in {"merge", "replace"}:
+            raise DashboardError("导入模式只能是 merge 或 replace")
+        before = deepcopy(dict(self.plugin.config))
+        backup = self.plugin.storage.path.with_name(
+            "config-backup-"
+            + datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+            + ".json"
+        )
+        backup.write_text(
+            json.dumps(_json_safe(before), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        incoming_management = deepcopy(config.get("group_management", {}))
+        incoming_scope = deepcopy(config.get("scope_settings", {}))
+        if mode == "replace":
+            self.plugin.config["group_management"] = incoming_management
+            self.plugin.config["scope_settings"] = incoming_scope
+        else:
+            current_management = self.plugin.config.setdefault(
+                "group_management", {}
+            )
+            current_management["enabled"] = incoming_management.get(
+                "enabled", current_management.get("enabled", False)
+            )
+            current_management["global_settings"] = {
+                **current_management.get("global_settings", {}),
+                **incoming_management.get("global_settings", {}),
+            }
+            by_umo = {
+                str(item.get("umo")): item
+                for item in current_management.get("groups", [])
+                if isinstance(item, dict) and item.get("umo")
+            }
+            for item in incoming_management.get("groups", []):
+                by_umo[str(item["umo"])] = item
+            current_management["groups"] = list(by_umo.values())
+            self.plugin.config["scope_settings"] = {
+                **self.plugin.config.get("scope_settings", {}),
+                **incoming_scope,
+            }
+        self.plugin.config["config_layout_version"] = int(
+            config.get("config_layout_version", 0)
+        )
+        try:
+            self._save_config(self.plugin)
+        except Exception:
+            self.plugin.config.clear()
+            self.plugin.config.update(before)
+            raise
+        if "pending_retention_days" in incoming_management.get(
+            "global_settings", {}
+        ):
+            self.plugin.storage.retention_days = max(
+                1, int(self.plugin._config("pending_retention_days", 30))
+            )
+            self.plugin.storage.prune()
+        management = self.plugin.config.get("group_management", {})
+        return {
+            "ok": True,
+            "mode": mode,
+            "groups": len(management.get("groups", [])),
+            "backup": str(backup),
+        }
+
+    async def import_preview(self) -> Any:
+        try:
+            payload = await request.json(default={})
+            if not isinstance(payload, dict):
+                raise DashboardError("请求体格式不正确")
+            kind = str(payload.get("kind") or "").strip().lower()
+            data = payload.get("data")
+            if kind == "state":
+                return json_response(
+                    {"kind": "state", "preview": self.plugin.storage.state_preview(data)}
+                )
+            if kind == "config":
+                return json_response(
+                    {"kind": "config", "preview": self._config_import_preview(data)}
+                )
+            raise DashboardError("导入类型只能是 state 或 config")
+        except Exception as exc:
+            return self._error(exc, "预览导入失败")
+
+    async def import_state(self) -> Any:
+        try:
+            payload = await request.json(default={})
+            if not isinstance(payload, dict):
+                raise DashboardError("请求体格式不正确")
+            mode = str(payload.get("mode") or "merge").strip().lower()
+            result = self.plugin.storage.import_state(payload.get("data"), mode)
+            return json_response(result)
+        except Exception as exc:
+            return self._error(exc, "导入运行数据失败")
+
+    async def import_config(self) -> Any:
+        try:
+            payload = await request.json(default={})
+            if not isinstance(payload, dict):
+                raise DashboardError("请求体格式不正确")
+            config = self._config_import_data(payload.get("data"))
+            mode = str(payload.get("mode") or "merge").strip().lower()
+            result = self._apply_config_import(config, mode)
+            return json_response(
+                {
+                    **result,
+                    "message": "配置已导入，当前视图会刷新",
+                    "config": self._config_response(""),
+                }
+            )
+        except Exception as exc:
+            return self._error(exc, "导入插件配置失败")
 
     # ------------------------------------------------------------------
     # Handler: 导出
