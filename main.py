@@ -155,6 +155,13 @@ CONFIG_SECTIONS = {
     "verify_timeout_action": "verify_settings",
     "verify_prompt": "verify_settings",
 }
+
+PANEL_FEATURE_KEYS = {
+    "enable_join_notice",
+    "enable_join_reply_review",
+    "enable_join_verify",
+}
+
 LEGACY_CONFIG_KEYS = tuple(
     key
     for key in CONFIG_SECTIONS
@@ -1185,12 +1192,15 @@ class QQGroupAdminPlugin(Star):
         return True
 
     def _set_feature_for_umo(self, umo: str, key: str, value: bool) -> None:
-        if self._config("enable_per_group_feature_settings", False):
-            GroupConfig(self.config).set_value(
-                umo, CONFIG_SECTIONS[key], key, value
-            )
-        else:
-            self._set_config(key, value)
+        section = CONFIG_SECTIONS[key]
+        global_value = bool(self._config(key, False))
+        GroupConfig(self.config).apply_panel_override(
+            umo,
+            section,
+            key,
+            bool(value),
+            global_value,
+        )
 
     async def _send_panel_text(
         self, api: QQGroupManageAPI, group: str, text: str, event_id: str = ""
@@ -2371,9 +2381,15 @@ class QQGroupAdminPlugin(Star):
 
     def _group_setting(self, key: str, group_umo: str, default: Any = None) -> Any:
         global_value = self._config(key, default)
-        if not self._config("enable_per_group_feature_settings", False):
+        if (
+            not self._config("enable_per_group_feature_settings", False)
+            and key not in PANEL_FEATURE_KEYS
+        ):
             return global_value
-        if self.config.get("config_layout_version", 0) >= 2:
+        if (
+            self.config.get("config_layout_version", 0) >= 2
+            or key in PANEL_FEATURE_KEYS
+        ):
             profile = GroupConfig(self.config).profile(group_umo)
             if profile is not None:
                 return profile.get(CONFIG_SECTIONS.get(key), {}).get(key, global_value)

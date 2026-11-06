@@ -105,6 +105,67 @@ class GroupConfig:
             raise
         return True
 
+    def _find_profile(self, umo: str) -> dict | None:
+        matches = [
+            item
+            for item in self.data.get("groups", [])
+            if isinstance(item, dict) and str(item.get("umo") or "") == umo
+        ]
+        if len(matches) > 1:
+            raise ValueError(f"群配置 UMO 重复，请在面板合并：{umo}")
+        return matches[0] if matches else None
+
+    def _equivalent_to_global(self, profile: dict) -> bool:
+        """Whether a profile has no value differing from global_settings."""
+        global_settings = self.data.get("global_settings", {})
+        for section, values in global_settings.items():
+            if not isinstance(values, dict):
+                continue
+            profile_section = profile.get(section, {})
+            if not isinstance(profile_section, dict):
+                return False
+            for key, value in values.items():
+                if profile_section.get(key, value) != value:
+                    return False
+        return True
+
+    def apply_panel_override(
+        self,
+        umo: str,
+        section: str,
+        key: str,
+        value: Any,
+        global_value: Any,
+    ) -> bool:
+        """Set one panel switch for a group, or restore inheritance at global value."""
+        before = deepcopy(dict(self.config))
+        try:
+            profile = self._find_profile(umo)
+            if value == global_value:
+                if profile is None:
+                    return False
+                profile_section = profile.get(section)
+                if not isinstance(profile_section, dict):
+                    return False
+                profile_section.pop(key, None)
+                if self._equivalent_to_global(profile):
+                    self.data["groups"].remove(profile)
+            else:
+                if profile is None:
+                    profile = self.snapshot(umo)
+                    self.data["groups"].append(profile)
+                profile["confirmed"] = True
+                profile.setdefault(section, {})[key] = deepcopy(value)
+                if self._equivalent_to_global(profile):
+                    # Defensive: a snapshot must not become an empty inheritance row.
+                    self.data["groups"].remove(profile)
+            self.save()
+            return True
+        except Exception:
+            self.config.clear()
+            self.config.update(before)
+            raise
+
     def save(self) -> None:
         save = getattr(self.config, "save_config", None)
         if callable(save):
