@@ -1,7 +1,7 @@
 name: astrbot_plugin_qq_group_manage
 display_name: QQ官机群管
-desc: QQ 官方机器人群管理：禁言、入群申请审批、进群验证、成员进退群通知、分群管理员、LLM 工具和 WebUI 控制台
-short_desc: QQ 官方机器人禁言、入群审批、进群验证、进退群通知、分群管理员与 WebUI 控制台。
+desc: 把 QQ 官方群管装进聊天框：禁言、审批、验证、通知、广播、分群、LLM 工具和 WebUI，一句话就能管。
+short_desc: 禁言、审批、验证、广播、群管面板和 WebUI 配置，让 QQ 官方群管理更省心。
 author: 简单么么熊
 version: 2.9.5
 astrbot_version: ">=4.26.0"

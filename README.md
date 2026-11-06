@@ -4,7 +4,7 @@
 
 # 🧰 QQ官机群管
 
-**在群里发一句话，就能完成禁言、审批、验证和风控的 AstrBot 插件**
+**把 QQ 官方群管装进聊天框：禁言、审批、验证、广播、群管面板和 WebUI 配置，一句话就能管。**
 
 [![版本 2.9.5](https://img.shields.io/badge/版本-2.9.5-89b4fa.svg)](CHANGELOG.md)
 [![License: CC BY-NC-ND 4.0](https://img.shields.io/badge/License-CC%20BY--NC--ND%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc-nd/4.0/)
