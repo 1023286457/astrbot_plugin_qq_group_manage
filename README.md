@@ -9,7 +9,7 @@
 [![作者 简单么么熊](https://img.shields.io/badge/作者-简单么么熊-f5b7c7.svg)](https://github.com/1023286457)
 [![QQ群 1081896895](https://img.shields.io/badge/QQ群-1081896895-12B7F5.svg)](https://qm.qq.com/q/LWmwpA9kuk)
 
-<img src="https://count.getloli.com/@1023286457_qq_group_manage?name=1023286457_qq_group_manage&amp;theme=booru-lewd&amp;padding=7&amp;offset=0&amp;align=top&amp;scale=1&amp;pixelated=1&amp;darkmode=auto" alt="访问计数" />
+<img src="https://count.getloli.com/@1023286457_qq_group_manage?name=1023286457_qq_group_manage&amp;theme=green&amp;padding=7&amp;offset=0&amp;align=top&amp;scale=1&amp;pixelated=1&amp;darkmode=auto" alt="访问计数" />
 
 [功能总览](#overview) · [安装](#install) · [WebUI](#webui) · [指令速查](#commands) · [入群审批](#approval) · [进群验证](#verify) · [关键词风控](#keywords) · [权限与分群](#permissions) · [进退群通知](#notices) · [数据备份](#data)
 
