@@ -6,7 +6,7 @@
 
 **在群里发一句话，就能完成禁言、审批、验证和风控的 AstrBot 插件**
 
-[![版本 2.9.6](https://img.shields.io/badge/版本-2.9.6-89b4fa.svg)](CHANGELOG.md)
+[![版本 2.9.5](https://img.shields.io/badge/版本-2.9.5-89b4fa.svg)](CHANGELOG.md)
 [![License: CC BY-NC-ND 4.0](https://img.shields.io/badge/License-CC%20BY--NC--ND%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc-nd/4.0/)
 [![作者 简单么么熊](https://img.shields.io/badge/作者-简单么么熊-f5b7c7.svg)](https://github.com/1023286457)
 ![QQ群 1081896895](https://img.shields.io/badge/QQ群-1081896895-12B7F5.svg)
@@ -471,7 +471,7 @@ QQ 的[撤回接口](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_gro
 
 完整许可证见 [LICENSE](LICENSE)，官方说明见 [CC BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/)。
 
-> 本项目从 2.9.6 起使用 CC BY-NC-ND 4.0。此前按 MIT 发布的旧版本仍按 MIT 授权，无法撤回。
+> 本项目从 2.9.5 起使用 CC BY-NC-ND 4.0。此前按 MIT 发布的旧版本仍按 MIT 授权，无法撤回。
 
 ---
 
