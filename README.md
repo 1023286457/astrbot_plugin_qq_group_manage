@@ -6,10 +6,10 @@
 
 **在群里发一句话，就能完成禁言、审批、验证和风控的 AstrBot 插件**
 
-[![版本 2.9.3](https://img.shields.io/badge/版本-2.9.3-89b4fa.svg)](CHANGELOG.md)
+[![版本 2.9.4](https://img.shields.io/badge/版本-2.9.4-89b4fa.svg)](CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-a3be8c.svg)](LICENSE)
 [![作者 简单么么熊](https://img.shields.io/badge/作者-简单么么熊-f5b7c7.svg)](https://github.com/1023286457)
-[![QQ群 1033011763](https://img.shields.io/badge/QQ群-1033011763-12B7F5.svg)](https://qm.qq.com/q/JAq27UUlkO)
+![QQ群 1081896895](https://img.shields.io/badge/QQ群-1081896895-12B7F5.svg)
 
 <img src="https://count.getloli.com/@1023286457_qq_group_manage?name=1023286457_qq_group_manage&amp;theme=booru-lewd&amp;padding=7&amp;offset=0&amp;align=top&amp;scale=1&amp;pixelated=1&amp;darkmode=auto" alt="访问计数" />
 
@@ -443,8 +443,8 @@ QQ 的[撤回接口](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_gro
 
 觉得好用就给简单么么熊点一颗 ⭐ 吧！
 
-[更新日志](CHANGELOG.md) · [提交记录](https://github.com/1023286457/astrbot_plugin_qq_group_manage/commits/main) · [反馈问题](https://github.com/1023286457/astrbot_plugin_qq_group_manage/issues) · [加入交流群](https://qm.qq.com/q/JAq27UUlkO) · [MIT License](LICENSE)
+[更新日志](CHANGELOG.md) · [提交记录](https://github.com/1023286457/astrbot_plugin_qq_group_manage/commits/main) · [反馈问题](https://github.com/1023286457/astrbot_plugin_qq_group_manage/issues) · [加入交流群](https://qm.qq.com/) · [MIT License](LICENSE)
 
-<sub>交流群：[QQ群管插件反馈群 1033011763](https://qm.qq.com/q/JAq27UUlkO)</sub>
+<sub>交流群：QQ群管插件反馈群 1081896895</sub>
 
 </div>

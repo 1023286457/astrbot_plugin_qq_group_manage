@@ -44,7 +44,7 @@ except Exception as exc:  # pragma: no cover - 仅在旧的 AstrBot 上触发
 
 PLUGIN_NAME = "astrbot_plugin_qq_group_manage"
 PLUGIN_DISPLAY_NAME = "QQ官机群管"
-PLUGIN_VERSION = "2.9.3"
+PLUGIN_VERSION = "2.9.4"
 QQ_PLATFORMS = {"qq_official", "qq_official_webhook"}
 VIEW_NAME = "console"
 SECTION_ORDER = (
@@ -187,6 +187,12 @@ class DashboardAPI:
                 self.release_verification,
                 ["POST"],
                 "放行进群验证",
+            ),
+            (
+                "verifications/release-all",
+                self.release_all_verifications,
+                ["POST"],
+                "一键放行进群验证",
             ),
             (
                 "verifications/retry",
@@ -1262,6 +1268,72 @@ class DashboardAPI:
             return json_response({"ok": True, "warning": warning, "message": message})
         except Exception as exc:
             return self._error(exc, "放行进群验证失败")
+
+    async def release_all_verifications(self) -> Any:
+        try:
+            payload = await request.json(default={})
+            if not isinstance(payload, dict):
+                raise DashboardError("请求体格式不正确")
+            raw_ids = payload.get("ids")
+            if not isinstance(raw_ids, list):
+                raise DashboardError("ids 必须是验证记录列表")
+            ids = list(dict.fromkeys(str(item).strip() for item in raw_ids if str(item).strip()))
+            if not ids:
+                raise DashboardError("没有可放行的验证记录")
+            if len(ids) > 200:
+                raise DashboardError("一次最多放行 200 条验证记录，请先按群筛选")
+            released = 0
+            failed = 0
+            warnings: list[str] = []
+            for token in ids:
+                try:
+                    record = self._find_verification(token)
+                    if record is None:
+                        failed += 1
+                        continue
+                    platform_id = str(record.get("platform_id") or "")
+                    group_openid = str(record.get("group_openid") or "")
+                    member_openid = str(record.get("member_openid") or "")
+                    platform = self._platform(platform_id)
+                    if platform is None or getattr(platform, "client", None) is None:
+                        failed += 1
+                        warnings.append(f"{member_openid or token}：对应平台离线")
+                        continue
+                    key = (platform_id, group_openid, member_openid)
+                    lock = await self._acquire_verification_lock(key)
+                    try:
+                        current = self._find_verification(token)
+                        if current is None:
+                            failed += 1
+                            continue
+                        warning = await self._unmute_if_failed(platform, current)
+                        self.plugin.storage.remove_verification(*key)
+                        released += 1
+                        if warning:
+                            warnings.append(f"{member_openid or token}：{warning}")
+                    finally:
+                        lock.release()
+                except Exception:
+                    failed += 1
+                    logger.exception("[%s] 一键放行单条验证失败", PLUGIN_NAME)
+            message = f"已放行 {released} 人"
+            if failed:
+                message += f"，{failed} 条未处理"
+            if warnings:
+                message += f"；{warnings[0]}"
+                if len(warnings) > 1:
+                    message += f" 等 {len(warnings)} 条提示"
+            return json_response(
+                {
+                    "ok": True,
+                    "released": released,
+                    "failed": failed,
+                    "warnings": warnings[:50],
+                    "message": message,
+                }
+            )
+        except Exception as exc:
+            return self._error(exc, "一键放行进群验证失败")
 
     async def retry_verification(self) -> Any:
         try:

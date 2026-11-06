@@ -8,7 +8,7 @@ const modalRoot = document.getElementById("modal-root");
 const toastRoot = document.getElementById("toast-root");
 
 const PLUGIN_NAME = "astrbot_plugin_qq_group_manage";
-const PLUGIN_VERSION = "2.9.3";
+const PLUGIN_VERSION = "2.9.4";
 const TAB_IDS = ["overview", "pending", "verify", "groups", "settings", "data"];
 
 const TABS = [
@@ -1471,6 +1471,26 @@ function footer() {
     el("span", {}, `v${PLUGIN_VERSION}`),
     el("span", { class: "dot-sep" }, "·"),
     el("span", {}, "数据仅在 AstrBot 本地处理"),
+    el("span", { class: "dot-sep" }, "·"),
+    el(
+      "span",
+      {},
+      "插件作者：",
+      el(
+        "a",
+        {
+          class: "footer-link",
+          href: "https://github.com/1023286457",
+          target: "_blank",
+          rel: "noopener noreferrer",
+        },
+        "简单么么熊",
+      ),
+    ),
+    el("span", { class: "dot-sep" }, "·"),
+    el("span", {}, "QQ：1023286457"),
+    el("span", { class: "dot-sep" }, "·"),
+    el("span", {}, "QQ群：1081896895"),
   );
 }
 
@@ -1760,6 +1780,12 @@ function renderVerify() {
       el("h2", { class: "toolbar-title" }, "进群验证", count),
       el("div", { class: "search" }, icon("search", 14), search),
       groupSelect,
+      button(
+        "一键通过所有验证",
+        { className: "btn-primary btn-sm", onClick: () => releaseAllVerifications() },
+        icon("badge-check", 14),
+        el("span", {}, "一键通过所有验证"),
+      ),
       iconButton("refresh-cw", "刷新", () => refreshCurrent(true)),
     ),
     el("div", { class: "verify-grid", id: "verify-list" }),
@@ -1768,19 +1794,48 @@ function renderVerify() {
   renderVerifyList();
 }
 
-function renderVerifyList() {
-  const container = document.getElementById("verify-list");
-  if (!container) return;
+function filteredVerifications() {
   const all = state.verifications?.items || [];
   const text = state.filters.verifyText.trim().toLowerCase();
   const group = state.filters.verifyGroup;
-  const items = all.filter((item) => {
+  return all.filter((item) => {
     if (group && item.group_umo !== group) return false;
     if (!text) return true;
     return `${item.member_openid} ${item.member_short} ${item.group_label} ${item.question}`
       .toLowerCase()
       .includes(text);
   });
+}
+
+async function releaseAllVerifications() {
+  const items = filteredVerifications();
+  if (!items.length) {
+    toast("当前筛选下没有待处理的验证", "warning");
+    return;
+  }
+  const ok = await confirmAction(
+    "一键通过所有验证",
+    `确认通过当前筛选的 ${items.length} 名成员？验证失败被禁言的成员会同时尝试解禁；该操作不会影响其他筛选范围外的记录。`,
+    { iconName: "badge-check", confirmText: "全部通过" },
+  );
+  if (!ok) return;
+  try {
+    const result = await apiPost(
+      "verifications/release-all",
+      { ids: items.map((item) => item.id) },
+    );
+    toast(result?.message || `已放行 ${result?.released || 0} 人`);
+    await refreshCurrent(true);
+  } catch (error) {
+    toast(cleanError(error), "error");
+  }
+}
+
+function renderVerifyList() {
+  const container = document.getElementById("verify-list");
+  if (!container) return;
+  const all = state.verifications?.items || [];
+  const items = filteredVerifications();
   const count = document.getElementById("verify-count");
   if (count) count.textContent = `${items.length} 人待处理`;
   if (!items.length) {

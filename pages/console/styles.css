@@ -2208,6 +2208,15 @@ a:hover {
   opacity: 0.45;
 }
 
+.footer-link {
+  color: var(--brand-strong);
+  text-decoration: none;
+}
+
+.footer-link:hover {
+  text-decoration: underline;
+}
+
 .mono {
   font-family: var(--font-mono);
 }
