@@ -8,7 +8,7 @@ const modalRoot = document.getElementById("modal-root");
 const toastRoot = document.getElementById("toast-root");
 
 const PLUGIN_NAME = "astrbot_plugin_qq_group_manage";
-const PLUGIN_VERSION = "2.9.5";
+const PLUGIN_VERSION = "2.9.6";
 const TAB_IDS = ["overview", "pending", "verify", "groups", "settings", "broadcast", "data"];
 
 const TABS = [
