@@ -471,8 +471,6 @@ QQ 的[撤回接口](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_gro
 
 完整许可证见 [LICENSE](LICENSE)，官方说明见 [CC BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/)。
 
-> 本项目从 2.9.5 起使用 CC BY-NC-ND 4.0。此前按 MIT 发布的旧版本仍按 MIT 授权，无法撤回。
-
 ---
 
 <div align="center">
