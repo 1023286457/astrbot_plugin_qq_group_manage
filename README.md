@@ -9,7 +9,7 @@
 [![版本 2.9.5](https://img.shields.io/badge/版本-2.9.5-89b4fa.svg)](CHANGELOG.md)
 [![License: CC BY-NC-ND 4.0](https://img.shields.io/badge/License-CC%20BY--NC--ND%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc-nd/4.0/)
 [![作者 简单么么熊](https://img.shields.io/badge/作者-简单么么熊-f5b7c7.svg)](https://github.com/1023286457)
-![QQ群 1081896895](https://img.shields.io/badge/QQ群-1081896895-12B7F5.svg)
+[![QQ群 1081896895](https://img.shields.io/badge/QQ群-1081896895-12B7F5.svg)](https://qm.qq.com/q/LWmwpA9kuk)
 
 <img src="https://count.getloli.com/@1023286457_qq_group_manage?name=1023286457_qq_group_manage&amp;theme=booru-lewd&amp;padding=7&amp;offset=0&amp;align=top&amp;scale=1&amp;pixelated=1&amp;darkmode=auto" alt="访问计数" />
 
@@ -477,7 +477,7 @@ QQ 的[撤回接口](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_gro
 
 觉得好用就给简单么么熊点一颗 ⭐ 吧！
 
-[更新日志](CHANGELOG.md) · [提交记录](https://github.com/1023286457/astrbot_plugin_qq_group_manage/commits/main) · [反馈问题](https://github.com/1023286457/astrbot_plugin_qq_group_manage/issues) · [加入交流群](https://qm.qq.com/) · [CC BY-NC-ND 4.0](LICENSE)
+[更新日志](CHANGELOG.md) · [提交记录](https://github.com/1023286457/astrbot_plugin_qq_group_manage/commits/main) · [反馈问题](https://github.com/1023286457/astrbot_plugin_qq_group_manage/issues) · [加入交流群](https://qm.qq.com/q/LWmwpA9kuk) · [CC BY-NC-ND 4.0](LICENSE)
 
 <sub>交流群：QQ群管插件反馈群 1081896895</sub>
 
