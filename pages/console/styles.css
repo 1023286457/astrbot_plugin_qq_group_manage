@@ -1434,6 +1434,11 @@ a:hover {
   width: 100%;
 }
 
+.group-profile-filter {
+  width: 100%;
+  margin-top: 8px;
+}
+
 .group-list {
   display: grid;
   max-height: 620px;

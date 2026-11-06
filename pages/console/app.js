@@ -139,6 +139,7 @@ const state = {
     verifyText: "",
     verifyGroup: "",
     groupText: "",
+    groupProfile: "",
   },
   requestSeq: 0,
 };
@@ -2001,6 +2002,21 @@ function renderGroups() {
     },
   });
   const list = el("div", { class: "group-list", id: "group-list" });
+  const profileFilter = el(
+    "select",
+    {
+      class: "select group-profile-filter",
+      "aria-label": "群配置筛选",
+      onchange: (event) => {
+        state.filters.groupProfile = event.target.value;
+        renderGroupList();
+      },
+    },
+    el("option", { value: "" }, "全部群组"),
+    el("option", { value: "group" }, "分群配置"),
+    el("option", { value: "global" }, "继承全局"),
+  );
+  profileFilter.value = state.filters.groupProfile;
   page.replaceChildren(
     el(
       "div",
@@ -2023,7 +2039,12 @@ function renderGroups() {
             size: 14,
           }),
         ),
-        el("div", { class: "group-search" }, el("div", { class: "search" }, icon("search", 14), search)),
+        el(
+          "div",
+          { class: "group-search" },
+          el("div", { class: "search" }, icon("search", 14), search),
+          profileFilter,
+        ),
         list,
       ),
       el("div", { class: "group-detail", id: "group-detail" }),
@@ -2039,8 +2060,11 @@ function renderGroupList() {
   if (!container) return;
   const items = (state.groups?.items || []).filter((item) => {
     const text = state.filters.groupText.trim().toLowerCase();
+    const profileFilter = state.filters.groupProfile;
+    if (profileFilter === "group" && !item.profile?.exists) return false;
+    if (profileFilter === "global" && item.profile?.exists) return false;
     if (!text) return true;
-    return `${item.group_uid || ""} ${item.label} ${item.umo} ${item.platform_name}`
+    return `${item.group_uid || ""} ${item.note || ""} ${item.label} ${item.umo} ${item.platform_name}`
       .toLowerCase()
       .includes(text);
   });
@@ -2167,7 +2191,7 @@ function renderGroupDetail() {
           el(
             "h2",
             { class: "detail-title" },
-            group.group_uid ? `群 ${group.group_uid}` : group.note || group.label,
+            group.note || (group.group_uid ? `群 ${group.group_uid}` : group.label),
             group.note ? el("span", { class: "tag is-info" }, "已备注") : null,
             profile.exists
               ? el("span", { class: "tag is-success" }, "分群配置")
