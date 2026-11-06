@@ -1,7 +1,5 @@
 <div align="center">
 
-<img src="logo.png" width="128" alt="QQ官机群管" />
-
 # 🧰 QQ官机群管
 
 **QQ官方机器人群管插件:禁言、入群审批验证、成员进退群通知、群广播、Web UI控制台和LLM工具**
