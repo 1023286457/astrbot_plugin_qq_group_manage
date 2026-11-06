@@ -4,7 +4,7 @@
 
 **QQ官方机器人群管插件:禁言、入群审批验证、成员进退群通知、群广播、Web UI控制台和LLM工具**
 
-[![版本 2.9.5](https://img.shields.io/badge/版本-2.9.5-89b4fa.svg)](CHANGELOG.md)
+[![版本 2.9.6](https://img.shields.io/badge/版本-2.9.6-89b4fa.svg)](CHANGELOG.md)
 [![License: CC BY-NC-ND 4.0](https://img.shields.io/badge/License-CC%20BY--NC--ND%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc-nd/4.0/)
 [![作者 简单么么熊](https://img.shields.io/badge/作者-简单么么熊-f5b7c7.svg)](https://github.com/1023286457)
 [![QQ群 1081896895](https://img.shields.io/badge/QQ群-1081896895-12B7F5.svg)](https://qm.qq.com/q/LWmwpA9kuk)
