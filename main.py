@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import re
 import secrets
 from copy import deepcopy
@@ -24,6 +25,13 @@ from .storage import PluginStorage
 from .group_config import GroupConfig
 from .keyword_rules import JOIN_REGEX_KEYS, compile_join_pattern, match_join_rules
 from .join_verify import VERIFY_MODES
+from .panel import (
+    PANEL_IMAGE_KEYS,
+    load_image,
+    main_keyboard,
+    manage_keyboard,
+    parse_button,
+)
 from .settings_menu import (
     KEYWORD_VALUES,
     WORD_LISTS,
@@ -383,6 +391,8 @@ def format_group_admin_help(default_duration: str) -> str:
         "> 查看本群群管\n\n"
         "> `群管功能`  \n"
         "> 查看功能开关；点击蓝色状态填入切换指令，发送后生效\n\n"
+        "> `菜单`  \n"
+        "> 发送带按钮的淼淼菜单：功能列表、使用指南、获取帮助和群管面板\n\n"
         "> `群绑定 群号 [群名]`  \n"
         "> 把本群 group_openid 绑定到 QQ 群号备注，例如 `群绑定 123456789 天文社`；只影响控制台显示\n\n"
         "## 时间格式\n\n"
@@ -469,7 +479,7 @@ def review_quote(event: AstrMessageEvent) -> set[str] | None:
     PLUGIN_NAME,
     "简单么么熊",
     "QQ 官方机器人群管理：禁言、入群申请审批、分群管理员与 LLM 工具",
-    "2.9.4",
+    "2.9.5",
 )
 class QQGroupAdminPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig) -> None:
@@ -608,6 +618,8 @@ class QQGroupAdminPlugin(Star):
                         "on_group_join_request",
                         "on_group_member_add",
                         "on_group_member_remove",
+                        "on_group_add_robot",
+                        "on_group_del_robot",
                         "on_interaction_create",
                     )
                 }
@@ -656,15 +668,43 @@ class QQGroupAdminPlugin(Star):
                         if hasattr(result, "__await__"):
                             await result
 
+                async def robot_removed_handler(
+                    data: dict[str, Any],
+                    pid: str = platform_id,
+                    original: Any = old_handlers["on_group_del_robot"],
+                ) -> None:
+                    await self._run_sdk_event(self._handle_robot_removed, pid, data)
+                    if original is not None:
+                        result = original(data)
+                        if hasattr(result, "__await__"):
+                            await result
+
+                async def robot_added_handler(
+                    data: dict[str, Any],
+                    pid: str = platform_id,
+                    original: Any = old_handlers["on_group_add_robot"],
+                ) -> None:
+                    await self._run_sdk_event(self._handle_robot_added, pid, data)
+                    if original is not None:
+                        result = original(data)
+                        if hasattr(result, "__await__"):
+                            await result
+
                 setattr(client, "on_group_join_request", handler)
                 setattr(client, "on_group_member_add", member_add_handler)
                 setattr(client, "on_group_member_remove", member_remove_handler)
+                setattr(client, "on_group_del_robot", robot_removed_handler)
+                setattr(client, "on_group_add_robot", robot_added_handler)
 
                 async def interaction_handler(
                     interaction: Any,
                     pid: str = platform_id,
                     original: Any = old_handlers["on_interaction_create"],
                 ) -> None:
+                    if await self._run_sdk_event(
+                        self._handle_panel_interaction, pid, interaction
+                    ):
+                        return
                     if await self._run_sdk_event(
                         self.verifier.handle_interaction, pid, interaction
                     ):
@@ -856,6 +896,54 @@ class QQGroupAdminPlugin(Star):
         except Exception:
             logger.exception("[%s] 成员进退群通知发送失败", PLUGIN_NAME)
 
+    async def _handle_robot_added(
+        self, platform_id: str, item: dict[str, Any]
+    ) -> None:
+        """GROUP_ADD_ROBOT: make a newly joined group visible immediately."""
+        group_openid = str(item.get("group_openid") or "").strip()
+        if not group_openid:
+            logger.warning("[%s] 机器人进群事件缺少 group_openid: %r", PLUGIN_NAME, item)
+            return
+        try:
+            changed = self.storage.remember_group(platform_id, group_openid)
+        except Exception:
+            logger.exception("[%s] 记录机器人新进群失败", PLUGIN_NAME)
+            return
+        logger.info(
+            "[%s] 机器人加入群 %s，已%s已知群记录",
+            PLUGIN_NAME,
+            group_openid,
+            "更新" if changed else "保留",
+        )
+
+    async def _handle_robot_removed(
+        self, platform_id: str, item: dict[str, Any]
+    ) -> None:
+        """GROUP_DEL_ROBOT: remove every local trace of a group after removal."""
+        group_openid = str(item.get("group_openid") or "").strip()
+        if not group_openid:
+            logger.warning("[%s] 机器人退群事件缺少 group_openid: %r", PLUGIN_NAME, item)
+            return
+        umo = self._group_umo(platform_id, group_openid)
+        try:
+            result = self.storage.purge_group(platform_id, group_openid)
+        except Exception:
+            logger.exception("[%s] 自动清理退群群数据失败", PLUGIN_NAME)
+            return
+        try:
+            config_removed = GroupConfig(self.config).remove(umo)
+        except Exception:
+            logger.exception("[%s] 自动删除退群群配置失败", PLUGIN_NAME)
+            config_removed = False
+        logger.warning(
+            "[%s] 机器人被移出群 %s，已直接清理群记录（配置=%s，待审=%s，验证=%s）",
+            PLUGIN_NAME,
+            group_openid,
+            config_removed,
+            result.get("pending", 0),
+            result.get("verifications", 0),
+        )
+
     async def _handle_join_request_event(
         self, platform_id: str, item: dict[str, Any]
     ) -> None:
@@ -1021,6 +1109,162 @@ class QQGroupAdminPlugin(Star):
                 if str(user_id)
             }
         )
+
+    async def _handle_panel_interaction(self, platform_id: str, interaction: Any) -> bool:
+        """Handle qqpanel:* callbacks from the group panel."""
+        resolved = getattr(getattr(interaction, "data", None), "resolved", None)
+        data = str(getattr(resolved, "button_data", "") or "")
+        match = parse_button(data)
+        if match is None:
+            return False
+        platform = self.context.get_platform_inst(platform_id)
+        if platform is None:
+            return True
+        api = QQGroupManageAPI(platform.client)
+        interaction_id = str(getattr(interaction, "id", "") or "")
+        if not interaction_id:
+            return True
+
+        async def acknowledge(code: int) -> None:
+            try:
+                await asyncio.wait_for(
+                    api.acknowledge_interaction(interaction_id, code), 3
+                )
+            except Exception:
+                logger.exception("[%s] 回应群管面板按钮失败", PLUGIN_NAME)
+
+        group = str(getattr(interaction, "group_openid", "") or "")
+        sender = str(getattr(interaction, "group_member_openid", "") or "")
+        if (
+            not group
+            or not sender
+            or getattr(interaction, "type", None) != 11
+            or getattr(interaction, "chat_type", None) != 1
+        ):
+            await acknowledge(4)
+            return True
+        action, value = match.group(1), match.group(2)
+        event_id = str(getattr(interaction, "event_id", "") or interaction_id)
+        if action == "noop":
+            await acknowledge(0)
+            return True
+        if action == "manage":
+            await acknowledge(0)
+            await self._send_manage_panel(platform_id, api, group, event_id)
+            return True
+        if action in PANEL_IMAGE_KEYS:
+            await acknowledge(0)
+            await self._send_panel_image(api, group, action, event_id)
+            return True
+        if action in {"audit", "verify"} and value in {"on", "off"}:
+            allowed = await self.verifier._admin_role_ok(api, group, sender)
+            if allowed is False:
+                await acknowledge(5)
+                await self._send_panel_text(
+                    api, group, "只有 QQ 群主或群管理员可以修改群管面板开关。", event_id
+                )
+                return True
+            if allowed is None:
+                # 群成员信息接口是白名单接口；查询失败时依赖 QQ 客户端对
+                # permission.type=1 按钮的身份校验，避免误伤真正的群主。
+                logger.warning(
+                    "[%s] 群成员角色查询失败，按 QQ 客户端管理员按钮权限继续",
+                    PLUGIN_NAME,
+                )
+            enabled = value == "on"
+            umo = self._group_umo(platform_id, group)
+            if action == "audit":
+                self._set_feature_for_umo(umo, "enable_join_notice", enabled)
+                self._set_feature_for_umo(umo, "enable_join_reply_review", enabled)
+            else:
+                self._set_feature_for_umo(umo, "enable_join_verify", enabled)
+            await acknowledge(0)
+            await self._send_manage_panel(platform_id, api, group, event_id)
+            return True
+        await acknowledge(4)
+        return True
+
+    def _set_feature_for_umo(self, umo: str, key: str, value: bool) -> None:
+        if self._config("enable_per_group_feature_settings", False):
+            GroupConfig(self.config).set_value(
+                umo, CONFIG_SECTIONS[key], key, value
+            )
+        else:
+            self._set_config(key, value)
+
+    async def _send_panel_text(
+        self, api: QQGroupManageAPI, group: str, text: str, event_id: str = ""
+    ) -> None:
+        try:
+            await asyncio.wait_for(
+                api.send_group_text(group, text, event_id=event_id), 10
+            )
+        except Exception:
+            logger.exception("[%s] 发送群管面板提示失败", PLUGIN_NAME)
+
+    async def _send_panel_image(
+        self, api: QQGroupManageAPI, group: str, key: str, event_id: str
+    ) -> None:
+        image = load_image(self.storage, key)
+        if image is None:
+            await self._send_panel_text(
+                api,
+                group,
+                f"还没有上传「{PANEL_IMAGE_KEYS.get(key, key)}」图片，请先到 WebUI → 数据页上传。",
+                event_id,
+            )
+            return
+        raw, mime, name = image
+        try:
+            uploaded = await asyncio.wait_for(
+                api.upload_group_image(
+                    group,
+                    name,
+                    base64.b64encode(raw).decode("ascii"),
+                ),
+                20,
+            )
+            file_info = (
+                str(uploaded.get("file_info") or "")
+                if isinstance(uploaded, dict)
+                else ""
+            )
+            if not file_info:
+                raise RuntimeError("上传接口没有返回 file_info")
+            await asyncio.wait_for(api.send_group_media(group, file_info), 15)
+        except Exception:
+            logger.exception("[%s] 发送群管面板图片失败", PLUGIN_NAME)
+            await self._send_panel_text(api, group, "图片发送失败，请稍后重试。", event_id)
+
+    async def _send_manage_panel(
+        self, platform_id: str, api: QQGroupManageAPI, group: str, event_id: str = ""
+    ) -> None:
+        umo = self._group_umo(platform_id, group)
+        audit = bool(self._group_setting("enable_join_reply_review", umo, False))
+        verify = bool(self._group_setting("enable_join_verify", umo, False))
+        try:
+            group_uid = self.storage.ensure_group_uid(umo)
+        except Exception:
+            logger.exception("[%s] 分配群 UID 失败", PLUGIN_NAME)
+            group_uid = ""
+        content = (
+            "群管面板\n"
+            f"入群审核申请：{'已开启' if audit else '已关闭'}\n"
+            f"入群人机验证：{'已开启' if verify else '已关闭'}\n"
+            f"群聊UID：{group_uid or group}"
+        )
+        try:
+            await asyncio.wait_for(
+                api.send_group_markdown(
+                    group,
+                    content,
+                    event_id=event_id,
+                    keyboard=manage_keyboard(group),
+                ),
+                15,
+            )
+        except Exception:
+            logger.exception("[%s] 发送群管面板失败", PLUGIN_NAME)
 
     async def _handle_review_interaction(
         self, platform_id: str, interaction: Any
@@ -1577,6 +1821,25 @@ class QQGroupAdminPlugin(Star):
         yield event.plain_result(
             format_group_admin_help(default_duration)
         ).use_markdown(True)
+
+    @filter.command("菜单", alias={"菜单指令", "群管面板"})
+    async def group_panel_command(self, event: AstrMessageEvent) -> None:
+        if not self._is_qq_group(event):
+            yield event.plain_result("该指令仅支持 QQ 官方机器人群聊。")
+            return
+        platform = self._platform(event)
+        if platform is None or getattr(platform, "client", None) is None:
+            yield event.plain_result("当前 QQ 平台不在线，无法打开菜单。")
+            return
+        try:
+            await QQGroupManageAPI(platform.client).send_group_markdown(
+                event.get_group_id(),
+                "## 淼淼菜单\n请点击下方按钮选择功能。",
+                keyboard=main_keyboard(),
+            )
+        except Exception:
+            logger.exception("[%s] 发送淼淼菜单失败", PLUGIN_NAME)
+            yield event.plain_result("淼淼菜单发送失败，请稍后重试。")
 
     @filter.command("群管功能")
     async def group_feature_settings(

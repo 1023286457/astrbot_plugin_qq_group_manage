@@ -8,8 +8,8 @@ const modalRoot = document.getElementById("modal-root");
 const toastRoot = document.getElementById("toast-root");
 
 const PLUGIN_NAME = "astrbot_plugin_qq_group_manage";
-const PLUGIN_VERSION = "2.9.4";
-const TAB_IDS = ["overview", "pending", "verify", "groups", "settings", "data"];
+const PLUGIN_VERSION = "2.9.5";
+const TAB_IDS = ["overview", "pending", "verify", "groups", "settings", "broadcast", "data"];
 
 const TABS = [
   { id: "overview", label: "总览", short: "总览", icon: "layout-dashboard" },
@@ -17,6 +17,7 @@ const TABS = [
   { id: "verify", label: "进群验证", short: "验证", icon: "badge-check", badge: "verify" },
   { id: "groups", label: "群组", short: "群组", icon: "users" },
   { id: "settings", label: "配置", short: "配置", icon: "settings" },
+  { id: "broadcast", label: "群广播", short: "广播", icon: "megaphone" },
   { id: "data", label: "数据", short: "数据", icon: "database" },
 ];
 
@@ -101,6 +102,10 @@ const ICONS = {
     '<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
   upload:
     '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/>',
+  megaphone:
+    '<path d="m3 11 18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/>',
+  image:
+    '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/>',
 };
 
 function icon(name, size = 18) {
@@ -923,6 +928,17 @@ async function loadTab(tab) {
       syncBadges();
     }
     renderData();
+    return;
+  }
+  if (tab === "broadcast") {
+    if (!state.groups) {
+      try {
+        state.groups = await apiGet("groups");
+      } catch {
+        state.groups = { items: [] };
+      }
+    }
+    renderBroadcast();
   }
 }
 
@@ -1291,7 +1307,7 @@ function renderOverview() {
                 el(
                   "span",
                   { class: "mini-copy" },
-                  el("p", { class: "mini-title" }, group.note || group.label),
+                  el("p", { class: "mini-title" }, group.group_uid ? `群 ${group.group_uid}` : group.note || group.label),
                   el("p", { class: "mini-sub mono" }, group.umo),
                 ),
                 el(
@@ -2024,7 +2040,9 @@ function renderGroupList() {
   const items = (state.groups?.items || []).filter((item) => {
     const text = state.filters.groupText.trim().toLowerCase();
     if (!text) return true;
-    return `${item.label} ${item.umo} ${item.platform_name}`.toLowerCase().includes(text);
+    return `${item.group_uid || ""} ${item.label} ${item.umo} ${item.platform_name}`
+      .toLowerCase()
+      .includes(text);
   });
   if (!items.length) {
     container.replaceChildren(
@@ -2053,7 +2071,7 @@ function renderGroupList() {
           el(
             "span",
             { class: "group-item-title" },
-            el("span", {}, item.note || item.label),
+            el("span", {}, item.note || (item.group_uid ? `群 ${item.group_uid}` : item.label)),
             item.whitelisted ? null : el("span", { class: "tag is-warning" }, "白名单外"),
           ),
           el("p", { class: "group-item-sub" }, item.umo),
@@ -2149,22 +2167,11 @@ function renderGroupDetail() {
           el(
             "h2",
             { class: "detail-title" },
-            group.note || group.label,
+            group.group_uid ? `群 ${group.group_uid}` : group.note || group.label,
             group.note ? el("span", { class: "tag is-info" }, "已备注") : null,
             profile.exists
               ? el("span", { class: "tag is-success" }, "分群配置")
               : el("span", { class: "tag" }, "继承全局"),
-            profile.confirmed
-              ? null
-              : el(
-                  "span",
-                  {
-                    class: "tag is-warning",
-                    title:
-                      "旧版迁移时无法确认该 UMO 属于哪个真实群，因此暂不生效。请在群里发送「群管功能」取得真实 group_openid 后修正并确认。",
-                  },
-                  "未确认 UMO",
-                ),
             profile.duplicate
               ? el("span", { class: "tag is-danger" }, "重复 UMO")
               : null,
@@ -2298,6 +2305,7 @@ function renderGroupDetail() {
             ? group.platform_id
             : `${group.platform_name}（${group.platform_id}）`,
         ),
+        kvRow("群 UID", group.group_uid || "未分配"),
         kvRow("群 OpenID", group.group_openid),
         kvRow("UMO", group.umo),
         kvRow("备注", group.note || "未备注"),
@@ -2308,25 +2316,9 @@ function renderGroupDetail() {
     ),
   );
 
-  const unconfirmedBanner =
-    profile.exists && profile.confirmed === false
-      ? el(
-          "div",
-          { class: "banner" },
-          icon("alert-triangle", 15),
-          el(
-            "div",
-            {},
-            el("strong", {}, "未确认 UMO 是什么？ "),
-            "这是旧版配置迁移时留下的临时标记：当时无法确认这个 UMO 属于哪个真实群，所以该分群配置暂时不生效。请在群里发送「群管功能」取得真实的 group_openid，到原生配置面板修正并勾选确认；或者点「恢复继承全局」删除这条未确认配置。",
-          ),
-        )
-      : null;
-
   container.replaceChildren(
     ...[
       header,
-      unconfirmedBanner,
       el("div", { class: "layout-2", style: "margin-top:0" }, el("div", { class: "stack" }, adminCard, featureCard), el("div", { class: "stack" }, infoCard)),
     ].filter(Boolean),
   );
@@ -2408,7 +2400,7 @@ async function removeAdmin(group, admin) {
 }
 
 async function restoreGroupInheritance(group) {
-  const display = group.note || group.label;
+  const display = group.group_uid ? `群 ${group.group_uid}` : group.note || group.label;
   const ok = await confirmAction(
     "恢复继承全局配置",
     `确认让 ${display} 恢复继承全局配置？这会删除该群的独立配置，群管名单、待审记录和验证记录不会删除。`,
@@ -2474,7 +2466,7 @@ async function openGroupConfig(group) {
   if (!group.profile?.exists) {
     const ok = await confirmAction(
       "创建分群配置",
-      `将为 ${group.note || group.label} 创建独立配置，初始值复制当前全局配置。创建后该群不再跟随全局修改。`,
+      `将为 ${group.group_uid ? `群 ${group.group_uid}` : group.note || group.label} 创建独立配置，初始值复制当前全局配置。创建后该群不再跟随全局修改。`,
       { iconName: "settings", confirmText: "创建并编辑" },
     );
     if (!ok) return;
@@ -2589,19 +2581,6 @@ function renderSettings() {
     button("重置", { className: "btn-ghost btn-sm", onClick: resetSettings }, icon("refresh-cw", 13), el("span", {}, "重置")),
     button("保存更改", { className: "btn-primary btn-sm", id: "save-button", onClick: saveSettings }, icon("check", 14), el("span", {}, "保存更改")),
   );
-
-  const pluginBlocked =
-    state.configScope === "group" &&
-    data.profile?.exists &&
-    data.profile?.confirmed === false;
-
-  if (pluginBlocked) {
-    sections.forEach((node) => {
-      node.querySelectorAll("input, textarea, select, button").forEach((input) => {
-        input.disabled = true;
-      });
-    });
-  }
 
   page.replaceChildren(
     ...[
@@ -3077,6 +3056,176 @@ async function resetSettings() {
 }
 
 /* ------------------------------------------------------------------ */
+/* 群广播                                                             */
+/* ------------------------------------------------------------------ */
+
+function pickBroadcastImage() {
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = "image/png,image/jpeg";
+  input.style.display = "none";
+  input.addEventListener("change", () => {
+    const file = input.files?.[0];
+    input.remove();
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) {
+      toast("图片不能超过 5MB", "error");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = String(reader.result || "");
+      const base64 = dataUrl.includes(",") ? dataUrl.split(",", 2)[1] : dataUrl;
+      state.broadcastImage = {
+        name: file.name || "broadcast.png",
+        mime: file.type || "image/png",
+        dataUrl,
+        data: base64,
+      };
+      renderBroadcast();
+    };
+    reader.onerror = () => toast("读取图片失败", "error");
+    reader.readAsDataURL(file);
+  });
+  document.body.appendChild(input);
+  input.click();
+}
+
+function clearBroadcastImage() {
+  state.broadcastImage = null;
+  renderBroadcast();
+}
+
+function renderBroadcast() {
+  const page = document.getElementById("page");
+  const groups = state.groups?.items || [];
+  const image = state.broadcastImage;
+  const textarea = el("textarea", {
+    id: "broadcast-text",
+    class: "textarea",
+    maxlength: 2000,
+    rows: 7,
+    placeholder: "输入要广播到所有已知群的文字……",
+    value: state.broadcastText || "",
+    oninput: (event) => {
+      state.broadcastText = event.target.value;
+    },
+  });
+  const result = el("pre", {
+    id: "broadcast-result",
+    class: "broadcast-result",
+    style: "display:none;white-space:pre-wrap;margin-top:12px",
+  });
+  page.replaceChildren(
+    el(
+      "div",
+      { class: "toolbar" },
+      el(
+        "h2",
+        { class: "toolbar-title" },
+        "群广播",
+        el("span", {}, `${groups.length} 个已知群`),
+      ),
+      button(
+        "一键广播到所有群",
+        {
+          className: "btn-primary",
+          onClick: () => sendBroadcast(groups.length),
+        },
+        icon("megaphone", 15),
+        el("span", {}, "一键广播"),
+      ),
+    ),
+    el(
+      "section",
+      { class: "card" },
+      el(
+        "div",
+        { class: "card-body" },
+        el(
+          "div",
+          { class: "banner is-warning", style: "margin-bottom:14px" },
+          icon("alert-triangle", 15),
+          el(
+            "div",
+            {},
+            "会发送到插件已知的全部群。文字和图片分两条消息发送；图片需 PNG/JPG，最大 5MB。请先确认内容，发送后无法撤回所有群的消息。",
+          ),
+        ),
+        el(
+          "div",
+          { class: "field" },
+          el("p", { class: "field-label" }, "广播文字"),
+          textarea,
+          el("p", { class: "field-hint" }, `${(state.broadcastText || "").length}/2000 字`),
+        ),
+        el(
+          "div",
+          { class: "field" },
+          el("p", { class: "field-label" }, "广播图片（可选）"),
+          el(
+            "div",
+            { class: "broadcast-image-row" },
+            button("选择图片", { className: "btn", onClick: pickBroadcastImage }, icon("upload", 14), el("span", {}, "选择图片")),
+            image
+              ? button("移除图片", { className: "btn btn-ghost btn-sm", onClick: clearBroadcastImage }, icon("x", 13), el("span", {}, "移除图片"))
+              : null,
+          ),
+          image
+            ? el("img", { class: "broadcast-image", src: image.dataUrl, alt: image.name })
+            : el("p", { class: "field-hint" }, "不选图片时只发文字；选图片后文字和图片都会发送。"),
+        ),
+        result,
+      ),
+    ),
+    footer(),
+  );
+}
+
+async function sendBroadcast(totalGroups) {
+  const text = (state.broadcastText || "").trim();
+  const image = state.broadcastImage;
+  if (!text && !image) {
+    toast("先输入文字或选择图片", "warning");
+    return;
+  }
+  if (!totalGroups) {
+    toast("当前没有已知群组", "warning");
+    return;
+  }
+  const ok = await confirmAction(
+    "确认群广播",
+    `将向 ${totalGroups} 个已知群发送${text ? "文字" : ""}${text && image ? "和" : ""}${image ? "图片" : ""}。确定现在发送？`,
+    { iconName: "megaphone", confirmText: "开始广播", danger: true },
+  );
+  if (!ok) return;
+  const resultNode = document.getElementById("broadcast-result");
+  if (resultNode) {
+    resultNode.style.display = "block";
+    resultNode.textContent = "正在广播，请稍候……";
+  }
+  try {
+    const result = await apiPost("broadcast/send", {
+      text,
+      image: image ? { name: image.name, mime: image.mime, data: image.data } : null,
+    });
+    const lines = [
+      result?.message || "广播完成",
+      `总数：${result?.total || 0}，成功：${result?.sent || 0}，失败：${result?.failed || 0}`,
+    ];
+    if (result?.image_failed) lines.push(`图片失败：${result.image_failed} 个群`);
+    if (result?.errors?.length) {
+      lines.push("部分错误：", ...result.errors.slice(0, 10));
+    }
+    if (resultNode) resultNode.textContent = lines.join("\n");
+    toast(result?.message || "广播完成", "success");
+  } catch (error) {
+    if (resultNode) resultNode.textContent = cleanError(error);
+    toast(cleanError(error), "error");
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /* 数据                                                               */
 /* ------------------------------------------------------------------ */
 
@@ -3119,6 +3268,7 @@ function renderData() {
       () => pickConfigImport(),
       "upload",
     ),
+    panelImageCard(),
     el(
       "section",
       { class: "data-card" },
@@ -3167,6 +3317,126 @@ function renderData() {
     ),
     footer(),
   );
+  loadPanelImages();
+}
+
+function panelImageCard() {
+  return el(
+    "section",
+    { class: "data-card", style: "grid-column:1/-1" },
+    el("div", { class: "data-card-icon" }, icon("image", 19)),
+    el("h3", {}, "群管面板图片"),
+    el(
+      "p",
+      {},
+      "为「功能列表」「使用指南」「获取帮助」上传图片，群成员点击群管面板按钮时发送。PNG/JPG，最大 5MB。",
+    ),
+    el("div", { class: "panel-image-grid", id: "panel-image-slots" }, el("p", { class: "muted" }, "加载中……")),
+  );
+}
+
+async function loadPanelImages() {
+  const container = document.getElementById("panel-image-slots");
+  if (!container) return;
+  try {
+    const data = await apiGet("panel/images");
+    const items = data?.items || {};
+    const keys = [
+      ["features", "功能列表"],
+      ["guide", "使用指南"],
+      ["help", "获取帮助"],
+    ];
+    container.replaceChildren(
+      ...keys.map(([key, label]) => {
+        const item = items[key] || {};
+        return el(
+          "article",
+          { class: "panel-image-slot" },
+          el("h4", {}, label),
+          item.exists && item.preview
+            ? el("img", { src: item.preview, alt: label })
+            : el("div", { class: "panel-image-empty" }, icon("image", 22), el("span", {}, "未上传")),
+          el(
+            "p",
+            { class: "field-hint" },
+            item.exists ? `${item.name || label} · ${Math.round((item.size || 0) / 1024)} KB` : "点击上传图片",
+          ),
+          el(
+            "div",
+            { class: "panel-image-actions" },
+            button(
+              item.exists ? "替换图片" : "上传图片",
+              { className: "btn btn-sm", onClick: () => pickPanelImage(key) },
+              icon("upload", 13),
+              el("span", {}, item.exists ? "替换图片" : "上传图片"),
+            ),
+            item.exists
+              ? button(
+                  "删除",
+                  { className: "btn btn-ghost btn-sm", onClick: () => deletePanelImage(key) },
+                  icon("trash", 13),
+                  el("span", {}, "删除"),
+                )
+              : null,
+          ),
+        );
+      }),
+    );
+  } catch (error) {
+    container.replaceChildren(el("p", { class: "muted" }, cleanError(error)));
+  }
+}
+
+function pickPanelImage(key) {
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = "image/png,image/jpeg";
+  input.style.display = "none";
+  input.addEventListener("change", () => {
+    const file = input.files?.[0];
+    input.remove();
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) {
+      toast("图片不能超过 5MB", "error");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const dataUrl = String(reader.result || "");
+      const data = dataUrl.includes(",") ? dataUrl.split(",", 2)[1] : dataUrl;
+      try {
+        const result = await apiPost("panel/images/save", {
+          key,
+          name: file.name,
+          mime: file.type,
+          data,
+        });
+        toast(result?.message || "图片已保存", "success");
+        await loadPanelImages();
+      } catch (error) {
+        toast(cleanError(error), "error");
+      }
+    };
+    reader.onerror = () => toast("读取图片失败", "error");
+    reader.readAsDataURL(file);
+  });
+  document.body.appendChild(input);
+  input.click();
+}
+
+async function deletePanelImage(key) {
+  const ok = await confirmAction("删除面板图片", "删除后对应按钮会提示尚未上传，确认删除？", {
+    confirmText: "删除",
+    danger: true,
+  });
+  if (!ok) return;
+  try {
+    const result = await apiPost("panel/images/delete", { key });
+    toast(result?.message || "图片已删除", "success");
+    await loadPanelImages();
+  } catch (error) {
+    toast(cleanError(error), "error");
+  }
 }
 
 function dataCard(iconName, title, description, actionLabel, action, actionIcon = "download") {

@@ -82,6 +82,29 @@ class GroupConfig:
             self.config.update(before)
             raise
 
+    def remove(self, umo: str) -> bool:
+        """Remove every profile for a group UMO, with config rollback on failure."""
+        matches = [
+            item
+            for item in self.data.get("groups", [])
+            if isinstance(item, dict) and str(item.get("umo") or "") == umo
+        ]
+        if not matches:
+            return False
+        before = deepcopy(dict(self.config))
+        try:
+            self.data["groups"] = [
+                item
+                for item in self.data.get("groups", [])
+                if not (isinstance(item, dict) and str(item.get("umo") or "") == umo)
+            ]
+            self.save()
+        except Exception:
+            self.config.clear()
+            self.config.update(before)
+            raise
+        return True
+
     def save(self) -> None:
         save = getattr(self.config, "save_config", None)
         if callable(save):

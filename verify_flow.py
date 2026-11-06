@@ -599,7 +599,10 @@ class JoinVerifier:
                 guard.finish_lookup()
         return (
             isinstance(member, dict)
-            and member.get("member_openid") == sender
+            and (
+                not member.get("member_openid")
+                or member.get("member_openid") == sender
+            )
             and member.get("member_role") in {"owner", "admin"}
         )
 

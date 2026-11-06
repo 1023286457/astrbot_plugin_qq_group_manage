@@ -188,3 +188,34 @@ class QQGroupManageAPI:
             f"/v2/groups/{group_id}/messages",
             payload=payload,
         )
+
+    async def upload_group_image(
+        self,
+        group_openid: str,
+        file_name: str,
+        file_data: str,
+    ) -> Any:
+        """Upload an image to a group and return its short-lived file_info."""
+        group_id = quote(group_openid, safe="")
+        return await self._request(
+            "POST",
+            f"/v2/groups/{group_id}/files",
+            payload={
+                "file_type": 1,
+                "file_name": file_name,
+                "file_data": file_data,
+                "srv_send_msg": False,
+            },
+        )
+
+    async def send_group_media(self, group_openid: str, file_info: str) -> Any:
+        group_id = quote(group_openid, safe="")
+        return await self._request(
+            "POST",
+            f"/v2/groups/{group_id}/messages",
+            payload={
+                "msg_type": 7,
+                "media": {"file_info": file_info},
+                "msg_seq": secrets.randbelow(9999) + 1,
+            },
+        )

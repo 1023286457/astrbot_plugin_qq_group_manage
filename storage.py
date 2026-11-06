@@ -12,6 +12,7 @@ from astrbot.api import logger
 
 SEEN_GROUP_REFRESH_SECONDS = 5 * 60
 SEEN_GROUP_LIMIT = 1000
+GROUP_UID_START = 100001
 STATE_KEYS = (
     "group_admins",
     "group_feature_overrides",
@@ -36,6 +37,8 @@ class PluginStorage:
             "verifications": {},
             "seen_groups": {},
             "group_notes": {},
+            "group_ids": {},
+            "free_group_ids": [],
             "ui_preferences": {},
         }
         self.load()
@@ -71,10 +74,13 @@ class PluginStorage:
             "verifications",
             "seen_groups",
             "group_notes",
+            "group_ids",
             "ui_preferences",
         ):
             if not isinstance(raw.get(name, {}), dict):
                 raise ValueError(f"{name} 必须是对象")
+        if not isinstance(raw.get("free_group_ids", []), list):
+            raise ValueError("free_group_ids 必须是列表")
         if any(
             not isinstance(item, dict) for item in raw.get("verifications", {}).values()
         ):
@@ -124,6 +130,11 @@ class PluginStorage:
         for key, note in raw.get("group_notes", {}).items():
             if not isinstance(key, str) or not isinstance(note, str):
                 raise ValueError("群备注必须是字符串键值对象")
+        for key, value in raw.get("group_ids", {}).items():
+            if not isinstance(key, str) or not str(value).isdigit():
+                raise ValueError("群 UID 编号必须是字符串数字")
+        if any(not str(value).isdigit() for value in raw.get("free_group_ids", [])):
+            raise ValueError("空闲群 UID 必须是字符串数字")
 
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -255,6 +266,7 @@ class PluginStorage:
                 if last_seen.tzinfo is None:
                     last_seen = last_seen.replace(tzinfo=timezone.utc)
                 if 0 <= (current - last_seen).total_seconds() < SEEN_GROUP_REFRESH_SECONDS:
+                    self.ensure_group_uid(umo)
                     return False
             except (TypeError, ValueError):
                 pass
@@ -276,6 +288,7 @@ class PluginStorage:
         except Exception:
             self.data["seen_groups"] = before
             raise
+        self.ensure_group_uid(umo)
         return True
 
     def group_note(self, umo: str) -> str:
@@ -283,6 +296,48 @@ class PluginStorage:
         if not isinstance(notes, dict):
             return ""
         return str(notes.get(str(umo or "")) or "")
+
+    def group_uid(self, umo: str) -> str:
+        ids = self.data.get("group_ids")
+        if not isinstance(ids, dict):
+            return ""
+        return str(ids.get(str(umo or "")) or "")
+
+    def ensure_group_uids(self, umos: list[str]) -> dict[str, str]:
+        """Allocate stable 100001, 100002... IDs, reusing IDs freed by kick."""
+        ids = self.data.get("group_ids")
+        if not isinstance(ids, dict):
+            ids = {}
+            self.data["group_ids"] = ids
+        free_raw = self.data.get("free_group_ids")
+        free = [str(value) for value in free_raw] if isinstance(free_raw, list) else []
+        used = {str(value) for value in ids.values()}
+        free = sorted({value for value in free if value not in used}, key=int)
+        missing = [umo for umo in umos if umo and umo not in ids]
+        if not missing:
+            return {umo: str(ids[umo]) for umo in umos if umo in ids}
+        before_ids = dict(ids)
+        before_free = list(free)
+        next_number = max([int(value) for value in used] + [GROUP_UID_START - 1]) + 1
+        try:
+            for umo in missing:
+                if free:
+                    uid = free.pop(0)
+                else:
+                    uid = str(next_number)
+                    next_number += 1
+                ids[umo] = uid
+                used.add(uid)
+            self.data["free_group_ids"] = free
+            self.save()
+        except Exception:
+            self.data["group_ids"] = before_ids
+            self.data["free_group_ids"] = before_free
+            raise
+        return {umo: str(ids[umo]) for umo in umos if umo in ids}
+
+    def ensure_group_uid(self, umo: str) -> str:
+        return self.ensure_group_uids([umo]).get(umo, "")
 
     def set_group_note(self, umo: str, note: str) -> str:
         umo = str(umo or "").strip()
@@ -506,6 +561,78 @@ class PluginStorage:
         # 进群验证记录不在这里清理：只在验证通过、退群或管理员处理时删除。
         if removed and save:
             self.save()
+
+    # ---------- 机器人退群清理 ----------
+
+    def purge_group(self, platform_id: str, group_openid: str) -> dict[str, Any]:
+        """Remove a group from every runtime index without keeping an archive."""
+        platform_id = str(platform_id or "").strip()
+        group_openid = str(group_openid or "").strip()
+        if not platform_id or not group_openid:
+            return {"removed": False, "reason": "缺少平台或群 ID"}
+        umo = f"{platform_id}:GroupMessage:{group_openid}"
+        pending = [
+            key
+            for key, value in self.data.get("pending", {}).items()
+            if isinstance(value, dict)
+            and str(value.get("platform_id") or "") == platform_id
+            and str(value.get("group_openid") or "") == group_openid
+        ]
+        verifications = [
+            key
+            for key, value in self.data.get("verifications", {}).items()
+            if isinstance(value, dict)
+            and str(value.get("platform_id") or "") == platform_id
+            and str(value.get("group_openid") or "") == group_openid
+        ]
+        reviewed = []
+        for key in self.data.get("reviewed", {}):
+            try:
+                parts = json.loads(key)
+            except (TypeError, ValueError):
+                continue
+            if (
+                isinstance(parts, list)
+                and len(parts) >= 2
+                and str(parts[0]) == platform_id
+                and str(parts[1]) == group_openid
+            ):
+                reviewed.append(key)
+        before = deepcopy(self.data)
+        freed_uid = ""
+        try:
+            for section in ("seen_groups", "group_notes", "group_feature_overrides"):
+                self.data.get(section, {}).pop(umo, None)
+            self.data.get("group_admins", {}).pop(group_openid, None)
+            for key in pending:
+                self.data.get("pending", {}).pop(key, None)
+            for key in verifications:
+                self.data.get("verifications", {}).pop(key, None)
+            for key in reviewed:
+                self.data.get("reviewed", {}).pop(key, None)
+            ids = self.data.get("group_ids")
+            if isinstance(ids, dict):
+                freed_uid = str(ids.pop(umo, "") or "")
+            if freed_uid:
+                free = self.data.get("free_group_ids")
+                if not isinstance(free, list):
+                    free = []
+                    self.data["free_group_ids"] = free
+                if freed_uid not in free:
+                    free.append(freed_uid)
+                    free.sort(key=int)
+            self.save()
+        except Exception:
+            self.data = before
+            raise
+        return {
+            "removed": True,
+            "umo": umo,
+            "freed_uid": freed_uid,
+            "pending": len(pending),
+            "verifications": len(verifications),
+            "reviewed": len(reviewed),
+        }
 
     # ---------- 安全导入 ----------
 

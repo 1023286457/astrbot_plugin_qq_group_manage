@@ -8,6 +8,7 @@ JSON，不依赖 Quart/FastAPI 的请求对象。
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import hmac
 import json
@@ -23,6 +24,13 @@ from .durations import parse_duration
 from .group_config import GROUP_SECTIONS, SCHEMA, GroupConfig, valid_group_umo
 from .join_verify import parse_custom_questions
 from .keyword_rules import compile_join_pattern
+from .panel import (
+    PANEL_IMAGE_KEYS,
+    delete_image,
+    image_data_url,
+    image_meta,
+    save_image,
+)
 
 try:  # AstrBot >= 4.26.0
     from astrbot.api.web import (
@@ -44,7 +52,7 @@ except Exception as exc:  # pragma: no cover - 仅在旧的 AstrBot 上触发
 
 PLUGIN_NAME = "astrbot_plugin_qq_group_manage"
 PLUGIN_DISPLAY_NAME = "QQ官机群管"
-PLUGIN_VERSION = "2.9.4"
+PLUGIN_VERSION = "2.9.5"
 QQ_PLATFORMS = {"qq_official", "qq_official_webhook"}
 VIEW_NAME = "console"
 SECTION_ORDER = (
@@ -152,6 +160,7 @@ class DashboardAPI:
     def __init__(self, plugin: Any) -> None:
         self.plugin = plugin
         self.context = plugin.context
+        self._broadcast_lock = asyncio.Lock()
 
     # ------------------------------------------------------------------
     # 路由注册
@@ -204,6 +213,10 @@ class DashboardAPI:
             ("groups/detail", self.get_group_detail, ["GET"], "群组详情"),
             ("groups/admins", self.update_group_admins, ["POST"], "维护群管名单"),
             ("groups/note", self.update_group_note, ["POST"], "保存群备注"),
+            ("broadcast/send", self.send_broadcast, ["POST"], "群广播"),
+            ("panel/images", self.get_panel_images, ["GET"], "群管面板图片"),
+            ("panel/images/save", self.save_panel_image, ["POST"], "保存群管面板图片"),
+            ("panel/images/delete", self.delete_panel_image, ["POST"], "删除群管面板图片"),
             ("config", self.get_config, ["GET"], "读取插件配置"),
             ("config/save", self.save_config, ["POST"], "保存插件配置"),
             (
@@ -438,6 +451,13 @@ class DashboardAPI:
 
         for item in groups.values():
             item["sources"] = sorted(item["sources"])
+        try:
+            uid_map = storage.ensure_group_uids(list(groups))
+        except Exception:
+            logger.exception("[%s] 分配群 UID 失败", PLUGIN_NAME)
+            uid_map = {}
+        for umo, item in groups.items():
+            item["group_uid"] = uid_map.get(umo, "")
         return groups
 
     def _group_summary(self, item: dict[str, Any]) -> dict[str, Any]:
@@ -456,6 +476,7 @@ class DashboardAPI:
             "platform_id": platform_id,
             "platform_name": platform_name,
             "group_openid": group_openid,
+            "group_uid": str(item.get("group_uid") or ""),
             "label": f"{platform_name} · {_short(group_openid, 8, 4)}",
             "profile": profile,
             "confirmed": bool(profile.get("confirmed", False)),
@@ -821,12 +842,6 @@ class DashboardAPI:
                 warnings.append(str(profile["note"]))
             if not profile["exists"]:
                 warnings.append("该群还没有分群配置，当前显示并继承全局配置。")
-            elif not profile["confirmed"]:
-                warnings.append(
-                    "未确认 UMO：这是旧版配置迁移留下的记录。迁移时无法确定它属于哪个真实群，"
-                    "所以暂时不会生效。请在群里发送「群管功能」取得真实 group_openid，"
-                    "到插件配置面板修正并勾选确认；或恢复继承全局配置。"
-                )
             if not per_group:
                 warnings.append("分群功能管理当前已关闭，分群配置不会生效。")
         return {
@@ -1018,11 +1033,8 @@ class DashboardAPI:
             profile = group_config.snapshot(umo)
             data.setdefault("groups", []).append(profile)
         elif not profile.get("confirmed", True):
-            raise DashboardError(
-                "该群配置尚未确认 UMO。它来自旧版迁移，可能不是目标群的 group_openid；"
-                "请先在插件配置面板修正并确认，或恢复继承全局配置",
-                status_code=409,
-            )
+            # 旧迁移标记不再在界面上展示；编辑当前群时直接视为确认。
+            profile["confirmed"] = True
         for key, value in updates.items():
             section_name = SECTION_FOR_KEY.get(key)
             if section_name is None or section_name == "scope_settings":
@@ -1463,6 +1475,197 @@ class DashboardAPI:
             )
         except Exception as exc:
             return self._error(exc, "保存群备注失败")
+
+    async def send_broadcast(self) -> Any:
+        try:
+            payload = await request.json(default={})
+            if not isinstance(payload, dict):
+                raise DashboardError("请求体格式不正确")
+            text = str(payload.get("text") or "").strip()
+            image = payload.get("image")
+            if not text and not image:
+                raise DashboardError("广播内容不能为空")
+            if len(text) > 2000:
+                raise DashboardError("广播文字不能超过 2000 个字符")
+            image_data = ""
+            image_name = "broadcast.png"
+            image_mime = ""
+            if image is not None:
+                if not isinstance(image, dict):
+                    raise DashboardError("图片格式不正确")
+                image_data = str(image.get("data") or "").strip()
+                image_name = str(image.get("name") or "broadcast.png").strip()
+                image_mime = str(image.get("mime") or "").strip().lower()
+                if image_mime not in {"image/png", "image/jpeg", "image/jpg"}:
+                    raise DashboardError("只支持 PNG 或 JPG 图片")
+                try:
+                    raw_image = base64.b64decode(image_data, validate=True)
+                except Exception as exc:
+                    raise DashboardError("图片数据不是有效的 Base64") from exc
+                if not raw_image:
+                    raise DashboardError("图片内容为空")
+                if len(raw_image) > 5 * 1024 * 1024:
+                    raise DashboardError("图片不能超过 5MB")
+                if image_mime == "image/jpg":
+                    image_mime = "image/jpeg"
+                if not image_name.lower().endswith((".png", ".jpg", ".jpeg")):
+                    image_name = "broadcast.png" if image_mime == "image/png" else "broadcast.jpg"
+
+            if self._broadcast_lock.locked():
+                raise DashboardError("已有群广播正在进行，请稍后再试", status_code=409)
+            async with self._broadcast_lock:
+                known = self._known_groups()
+                targets = []
+                for umo, item in known.items():
+                    platform_id = str(item.get("platform_id") or "")
+                    group_openid = str(item.get("group_openid") or "")
+                    if not platform_id or not group_openid:
+                        continue
+                    targets.append((umo, platform_id, group_openid))
+                if not targets:
+                    raise DashboardError("当前没有已知群组，无法广播")
+                if len(targets) > 200:
+                    raise DashboardError("一次最多广播 200 个群，请先清理群组记录")
+                sent = 0
+                failed = 0
+                image_failed = 0
+                errors: list[str] = []
+                for index, (umo, platform_id, group_openid) in enumerate(targets):
+                    platform = self._platform(platform_id)
+                    if platform is None or getattr(platform, "client", None) is None:
+                        failed += 1
+                        if len(errors) < 20:
+                            errors.append(f"{umo}：平台离线")
+                        continue
+                    api = QQGroupManageAPI(platform.client)
+                    delivered = False
+                    if text:
+                        try:
+                            await asyncio.wait_for(
+                                api.send_group_text(group_openid, text), 15
+                            )
+                            delivered = True
+                        except Exception as exc:
+                            if len(errors) < 20:
+                                errors.append(f"{umo}：文字发送失败 {exc}")
+                    if image_data:
+                        try:
+                            uploaded = await asyncio.wait_for(
+                                api.upload_group_image(
+                                    group_openid, image_name, image_data
+                                ),
+                                20,
+                            )
+                            file_info = (
+                                str(uploaded.get("file_info") or "")
+                                if isinstance(uploaded, dict)
+                                else ""
+                            )
+                            if not file_info:
+                                raise RuntimeError("图片上传未返回 file_info")
+                            await asyncio.wait_for(
+                                api.send_group_media(group_openid, file_info), 15
+                            )
+                            delivered = True
+                        except Exception as exc:
+                            image_failed += 1
+                            if len(errors) < 20:
+                                errors.append(f"{umo}：图片发送失败 {exc}")
+                    if delivered:
+                        sent += 1
+                    else:
+                        failed += 1
+                    if index + 1 < len(targets):
+                        await asyncio.sleep(0.25)
+                message = f"广播完成：成功 {sent} 个群"
+                if failed:
+                    message += f"，失败 {failed} 个"
+                if image_failed:
+                    message += f"，图片失败 {image_failed} 个"
+                return json_response(
+                    {
+                        "ok": True,
+                        "total": len(targets),
+                        "sent": sent,
+                        "failed": failed,
+                        "image_failed": image_failed,
+                        "errors": errors,
+                        "message": message,
+                    }
+                )
+        except Exception as exc:
+            return self._error(exc, "群广播失败")
+
+    async def get_panel_images(self) -> Any:
+        try:
+            meta = image_meta(self.plugin.storage)
+            items = {}
+            for key, label in PANEL_IMAGE_KEYS.items():
+                item = meta.get(key)
+                items[key] = {
+                    "key": key,
+                    "label": label,
+                    "exists": isinstance(item, dict),
+                    "name": str(item.get("name") or "") if isinstance(item, dict) else "",
+                    "mime": str(item.get("mime") or "") if isinstance(item, dict) else "",
+                    "size": int(item.get("size") or 0) if isinstance(item, dict) else 0,
+                    "preview": image_data_url(self.plugin.storage, key),
+                }
+            return json_response({"items": items})
+        except Exception as exc:
+            return self._error(exc, "读取群管面板图片失败")
+
+    async def save_panel_image(self) -> Any:
+        try:
+            payload = await request.json(default={})
+            if not isinstance(payload, dict):
+                raise DashboardError("请求体格式不正确")
+            key = str(payload.get("key") or "").strip()
+            if key not in PANEL_IMAGE_KEYS:
+                raise DashboardError("不支持的图片类型")
+            mime = str(payload.get("mime") or "").strip().lower()
+            if mime not in {"image/png", "image/jpeg", "image/jpg"}:
+                raise DashboardError("只支持 PNG 或 JPG 图片")
+            try:
+                raw = base64.b64decode(str(payload.get("data") or ""), validate=True)
+            except Exception as exc:
+                raise DashboardError("图片数据不是有效的 Base64") from exc
+            item = save_image(
+                self.plugin.storage,
+                key,
+                raw,
+                mime,
+                str(payload.get("name") or f"{key}.png"),
+            )
+            return json_response(
+                {
+                    "ok": True,
+                    "key": key,
+                    "item": item,
+                    "message": f"{PANEL_IMAGE_KEYS[key]}图片已保存",
+                }
+            )
+        except Exception as exc:
+            return self._error(exc, "保存群管面板图片失败")
+
+    async def delete_panel_image(self) -> Any:
+        try:
+            payload = await request.json(default={})
+            if not isinstance(payload, dict):
+                raise DashboardError("请求体格式不正确")
+            key = str(payload.get("key") or "").strip()
+            if key not in PANEL_IMAGE_KEYS:
+                raise DashboardError("不支持的图片类型")
+            changed = delete_image(self.plugin.storage, key)
+            return json_response(
+                {
+                    "ok": True,
+                    "changed": changed,
+                    "message": "图片已删除" if changed else "图片本来就不存在",
+                }
+            )
+        except Exception as exc:
+            return self._error(exc, "删除群管面板图片失败")
 
     # ------------------------------------------------------------------
     # Handler: 配置
