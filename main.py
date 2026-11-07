@@ -40,6 +40,7 @@ from .settings_menu import (
     verify_summary,
     word_page,
 )
+from .server_status import ServerStatusService
 from .spam_monitor import SpamMonitor
 from .qr_detect import decoder_available, ensure_decoder, is_qr_code
 from .recall_monitor import RecallMonitor
@@ -524,7 +525,7 @@ def review_quote(event: AstrMessageEvent) -> set[str] | None:
     PLUGIN_NAME,
     "简单么么熊",
     "QQ 官方机器人群管理：禁言、入群申请审批、分群管理员与 LLM 工具",
-    "2.9.8",
+    "2.9.9",
 )
 class QQGroupAdminPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig) -> None:
@@ -551,6 +552,7 @@ class QQGroupAdminPlugin(Star):
         self._callback_guard = ReviewCallbackGuard()
         self.spam_monitor = SpamMonitor()
         self.recall_monitor = RecallMonitor()
+        self.server_status = ServerStatusService(data_dir, self)
         self.verifier = JoinVerifier(self)
         self._verify_task: asyncio.Task | None = None
         self._qr_dep_task: asyncio.Task | None = None
@@ -566,7 +568,8 @@ class QQGroupAdminPlugin(Star):
         self._install_parser_patch()
 
     async def initialize(self) -> None:
-        """Install the optional QR decoder in the background after activation."""
+        """Install the optional QR decoder and start server sampling."""
+        await self.server_status.start()
         if decoder_available() or self._qr_dep_task is not None:
             return
         self._qr_dep_task = asyncio.create_task(self._install_qr_decoder())
@@ -2062,6 +2065,74 @@ class QQGroupAdminPlugin(Star):
             format_group_admin_help(default_duration)
         ).use_markdown(True)
 
+    @filter.command("查看状态", alias={"状态"})
+    async def server_status_command(self, event: AstrMessageEvent) -> None:
+        """发送服务器运行状态图片，失败时降级为文字摘要。"""
+        if not self._is_qq_group(event):
+            yield event.plain_result("该指令仅支持 QQ 官方机器人群聊。")
+            event.stop_event()
+            return
+        if not self._can_manage(event):
+            yield event.plain_result("你没有本群群管权限，无法查看服务器状态。")
+            event.stop_event()
+            return
+        service = self.server_status
+        config = service.get_config()
+        if not config.get("enabled", True):
+            yield event.plain_result("服务器运行状态采集已关闭。")
+            event.stop_event()
+            return
+        try:
+            raw = await asyncio.to_thread(service.render_card)
+            if raw:
+                platform = self._platform(event)
+                api = QQGroupManageAPI(platform.client)
+                group = event.get_group_id()
+                uploaded = await asyncio.wait_for(
+                    api.upload_group_image(
+                        group,
+                        "server-status.png",
+                        base64.b64encode(raw).decode("ascii"),
+                    ),
+                    20,
+                )
+                file_info = (
+                    str(uploaded.get("file_info") or "")
+                    if isinstance(uploaded, dict)
+                    else ""
+                )
+                if not file_info:
+                    raise RuntimeError("上传接口没有返回 file_info")
+                await asyncio.wait_for(api.send_group_media(group, file_info), 15)
+                event.stop_event()
+                return
+        except Exception:
+            logger.exception("[%s] 发送服务器状态图片失败，降级为文字", PLUGIN_NAME)
+        try:
+            data = await asyncio.to_thread(service.overview)
+            if not data.get("ok"):
+                message = str(data.get("error") or "服务器状态采集失败")
+            else:
+                memory = data.get("memory") or {}
+                disk = data.get("disk") or {}
+                network = data.get("network") or {}
+                message = (
+                    "服务器运行状态\n"
+                    f"CPU：{float(data.get('cpu') or 0):.1f}%\n"
+                    f"内存：{float(memory.get('percent') or 0):.1f}%"
+                    f"（{memory.get('text') or '--'}）\n"
+                    f"磁盘：{float(disk.get('percent') or 0):.1f}%"
+                    f"（{disk.get('text') or '--'}）\n"
+                    f"网络：↓ {network.get('down_text') or '--'} / ↑ {network.get('up_text') or '--'}\n"
+                    f"官方平台：{'在线' if data.get('bot', {}).get('online') else '离线'}\n"
+                    f"已知群聊：{data.get('known_groups', 0)}\n"
+                    f"采样间隔：{data.get('sample_seconds', '--')} 秒"
+                )
+        except Exception as exc:
+            message = f"读取服务器状态失败：{exc}"
+        yield event.plain_result(message)
+        event.stop_event()
+
     @filter.command("菜单", alias={"菜单指令", "群管面板"})
     async def group_panel_command(self, event: AstrMessageEvent) -> None:
         if not self._is_qq_group(event):
@@ -2827,6 +2898,9 @@ class QQGroupAdminPlugin(Star):
 
     async def terminate(self) -> None:
         self._terminating = True
+        server_status = getattr(self, "server_status", None)
+        if server_status is not None:
+            await server_status.stop()
         dashboard = getattr(self, "dashboard", None)
         if dashboard is not None:
             dashboard.unregister()

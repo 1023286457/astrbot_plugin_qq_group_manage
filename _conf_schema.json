@@ -444,7 +444,7 @@
             }
           },
           "spam_settings": {
-            "description": "⑩ 刷屏监控",
+            "description": "刷屏监控",
             "type": "object",
             "hint": "按时间窗口统计每位成员的消息频率，超过任一窗口上限时自动撤回近期消息并禁言。上限填写 0 表示关闭该窗口限制。",
             "items": {
@@ -975,7 +975,7 @@
                 }
               },
               "spam_settings": {
-                "description": "⑩ 刷屏监控",
+                "description": "刷屏监控",
                 "type": "object",
                 "hint": "按时间窗口统计每位成员的消息频率，超过任一窗口上限时自动撤回近期消息并禁言。上限填写 0 表示关闭该窗口限制。",
                 "items": {
@@ -1451,7 +1451,7 @@
     "invisible": true
   },
   "spam_settings": {
-    "description": "⑩ 刷屏监控",
+    "description": "刷屏监控",
     "type": "object",
     "hint": "按时间窗口统计每位成员的消息频率，超过任一窗口上限时自动撤回近期消息并禁言。上限填写 0 表示关闭该窗口限制。",
     "items": {
@@ -1656,5 +1656,36 @@
     "type": "int",
     "default": 30,
     "invisible": true
+  },
+  "server_status_settings": {
+    "description": "服务器运行状态",
+    "type": "object",
+    "hint": "服务器总体资源、历史趋势、异常事件和日报；QQ 官方平台只显示在线状态和插件已知群数。",
+    "items": {
+      "enable_server_status": {
+        "description": "启用服务器状态采集",
+        "type": "bool",
+        "default": true,
+        "hint": "关闭后停止采样，历史数据保留。"
+      },
+      "server_sample_seconds": {
+        "description": "采样间隔",
+        "type": "int",
+        "default": 30,
+        "hint": "15-300 秒，默认 30 秒。"
+      },
+      "server_glass_opacity": {
+        "description": "卡片透明度",
+        "type": "int",
+        "default": 75,
+        "hint": "20-100%，状态图片卡片的不透明度。"
+      },
+      "server_glass_blur": {
+        "description": "毛玻璃模糊",
+        "type": "int",
+        "default": 12,
+        "hint": "0-30，数值越大背景越模糊；0 表示关闭模糊。"
+      }
+    }
   }
 }

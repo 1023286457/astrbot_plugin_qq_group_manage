@@ -8,7 +8,7 @@ const modalRoot = document.getElementById("modal-root");
 const toastRoot = document.getElementById("toast-root");
 
 const PLUGIN_NAME = "astrbot_plugin_qq_group_manage";
-const PLUGIN_VERSION = "2.9.8";
+const PLUGIN_VERSION = "2.9.9";
 const TAB_IDS = ["overview", "pending", "verify", "groups", "spam", "settings", "broadcast", "data"];
 
 const TABS = [
@@ -45,6 +45,8 @@ const ICONS = {
     '<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>',
   database:
     '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/>',
+  server:
+    '<rect x="2" y="3" width="20" height="7" rx="2"/><rect x="2" y="14" width="20" height="7" rx="2"/><path d="M6 6.5h.01M6 17.5h.01"/>',
   "refresh-cw":
     '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 21H3v-5"/>',
   "alert-triangle":
@@ -136,6 +138,11 @@ const state = {
   groupDetail: null,
   spam: null,
   recall: null,
+  server: null,
+  serverConfig: null,
+  serverImage: null,
+  serverImagePreview: "",
+  serverLoading: false,
   monitorView: "spam",
   recallScope: "global",
   recallGroup: "",
@@ -184,6 +191,20 @@ function el(tag, attrs = {}, ...children) {
       node.addEventListener(key.slice(2).toLowerCase(), value);
     } else if (value === true) node.setAttribute(key, "");
     else node.setAttribute(key, String(value));
+  }
+  append(node, children);
+  return node;
+}
+
+function svgEl(tag, attrs = {}, ...children) {
+  const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  for (const [key, value] of Object.entries(attrs || {})) {
+    if (value === null || value === undefined || value === false) continue;
+    if (key.startsWith("on") && typeof value === "function") {
+      node.addEventListener(key.slice(2).toLowerCase(), value);
+    } else {
+      node.setAttribute(key, String(value));
+    }
   }
   append(node, children);
   return node;
@@ -542,6 +563,7 @@ async function boot() {
   await navigate(state.tab, { updateHash: false });
   window.setInterval(poll, 60_000);
   window.setInterval(refreshSpamSilent, 5_000);
+  window.setInterval(refreshServerSilent, 5_000);
 }
 
 function renderFatal(title, message) {
@@ -919,6 +941,12 @@ async function loadTab(tab) {
     return;
   }
   if (tab === "spam") {
+    if (state.monitorView === "server") {
+      await loadServerData(seq);
+      if (seq !== state.requestSeq) return;
+      renderMonitor();
+      return;
+    }
     const data = await apiGet("spam");
     if (seq !== state.requestSeq) return;
     state.spam = data;
@@ -2621,15 +2649,290 @@ const RECALL_CONFIG_KEYS = [
   "qr_recall_notice",
 ];
 
-function switchMonitorView(view) {
+async function switchMonitorView(view) {
+  if (view === "server") {
+    state.monitorView = "server";
+    try {
+      await loadServerData();
+    } catch (error) {
+      toast(cleanError(error), "error");
+    }
+    renderMonitor();
+    return;
+  }
   state.monitorView = view === "risk" ? "risk" : "spam";
   renderMonitor();
+}
+
+/* ------------------------------------------------------------------ */
+/* Server status                                                      */
+/* ------------------------------------------------------------------ */
+
+function serverBytes(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 0) return "--";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let index = 0;
+  let current = number;
+  while (current >= 1024 && index < units.length - 1) {
+    current /= 1024;
+    index += 1;
+  }
+  return `${current.toFixed(1)} ${units[index]}`;
+}
+
+function serverMetric(label, value, sub, tone = "", percent = null) {
+  return el(
+    "div",
+    { class: `status-metric ${tone}` },
+    el("span", { class: "status-metric-label" }, label),
+    el("strong", { class: "status-metric-value" }, value),
+    sub ? el("span", { class: "status-metric-sub" }, sub) : null,
+    percent === null || percent === undefined ? null : serverBar(percent, tone),
+  );
+}
+
+function serverBar(value, tone = "") {
+  const percent = Math.max(0, Math.min(100, Number(value) || 0));
+  return el(
+    "div",
+    { class: "status-bar" },
+    el("span", { class: `status-bar-fill ${tone}`, style: `width:${percent}%` }),
+  );
+}
+
+async function refreshServerSilent() {
+  if (state.tab !== "spam" || state.monitorView !== "server") return;
+  if (state.serverLoading || document.visibilityState !== "visible") return;
+  const active = document.activeElement;
+  if (active && ["INPUT", "TEXTAREA", "SELECT"].includes(active.tagName)) return;
+  state.serverLoading = true;
+  try {
+    state.server = await apiGet("status/overview");
+    if (state.tab === "spam" && state.monitorView === "server") renderMonitor();
+  } catch {
+    /* 静默刷新失败不打断页面 */
+  } finally {
+    state.serverLoading = false;
+  }
+}
+
+async function loadServerData(seq = state.requestSeq) {
+  const [overview, config] = await Promise.all([
+    apiGet("status/overview"),
+    apiGet("status/config"),
+  ]);
+  if (seq !== state.requestSeq) return;
+  state.server = overview;
+  state.serverConfig = config.config || {};
+  state.serverImage = config.image || { exists: false };
+  state.serverImagePreview = config.preview || "";
+}
+
+function renderServerOverview(data) {
+  const memory = data.memory || {};
+  const swap = data.swap || {};
+  const disk = data.disk || {};
+  const network = data.network || {};
+  const system = data.system || {};
+  return el(
+    "div",
+    { class: "stack" },
+    el(
+      "div",
+      { class: "status-grid status-grid-five" },
+      serverMetric("CPU", `${Number(data.cpu || 0).toFixed(1)}%`, `${system.load1 == null ? "负载 --" : `负载 ${Number(system.load1).toFixed(2)}`}`, "is-cpu", data.cpu),
+      serverMetric("内存", `${Number(memory.percent || 0).toFixed(1)}%`, memory.text || "--", "is-memory", memory.percent),
+      serverMetric("SWAP", `${Number(swap.percent || 0).toFixed(1)}%`, `${serverBytes(swap.used)} / ${serverBytes(swap.total)}`, "is-swap", swap.percent),
+      serverMetric("磁盘", `${Number(disk.percent || 0).toFixed(1)}%`, disk.text || "--", "is-disk", disk.percent),
+      serverMetric("运行时间", system.uptime || "--", `进程 ${system.processes ?? "--"}`),
+    ),
+    el(
+      "section",
+      { class: "card status-network-card" },
+      el(
+        "div",
+        { class: "card-head" },
+        el("div", { class: "card-head-icon" }, icon("activity", 16)),
+        el("div", { class: "card-head-copy" }, el("h2", { class: "card-title" }, "网络"), el("p", { class: "card-subtitle" }, "实时速率与累计流量")),
+      ),
+      el(
+        "div",
+        { class: "status-network-grid" },
+        el("div", {}, el("span", {}, "上行"), el("strong", {}, network.up_text || "--")),
+        el("div", {}, el("span", {}, "下行"), el("strong", {}, network.down_text || "--")),
+        el("div", {}, el("span", {}, "累计上行"), el("strong", {}, serverBytes(network.total_sent))),
+        el("div", {}, el("span", {}, "累计下行"), el("strong", {}, serverBytes(network.total_recv))),
+      ),
+    ),
+    el(
+      "div",
+      { class: "layout-2", style: "margin-top:0" },
+      el(
+        "section",
+        { class: "card" },
+        el("div", { class: "card-head" }, el("div", { class: "card-head-icon" }, icon("server", 16)), el("div", { class: "card-head-copy" }, el("h2", { class: "card-title" }, "系统信息"), el("p", { class: "card-subtitle" }, "QQ 官方平台与宿主机"))),
+        el(
+          "div",
+          { class: "card-body status-kv" },
+          kvRow("主机名", system.hostname || "--"),
+          kvRow("系统", system.platform || "--"),
+          kvRow("运行时长", system.uptime || "--"),
+          kvRow("进程数", String(system.processes ?? "--")),
+          kvRow("采样间隔", `${data.sample_seconds || "--"} 秒`),
+        ),
+      ),
+      el(
+        "section",
+        { class: "card" },
+        el("div", { class: "card-head" }, el("div", { class: "card-head-icon" }, icon("activity", 16)), el("div", { class: "card-head-copy" }, el("h2", { class: "card-title" }, "CPU 占用"), el("p", { class: "card-subtitle" }, "前 6 个进程"))),
+        el(
+          "div",
+          { class: "card-body" },
+          el(
+            "div",
+            { class: "table-wrap" },
+            el(
+              "table",
+              { class: "table status-process-table" },
+              el("thead", {}, el("tr", {}, el("th", {}, "进程"), el("th", {}, "PID"), el("th", {}, "CPU"), el("th", {}, "内存"))),
+              el(
+                "tbody",
+                {},
+                ...(data.processes || []).map((proc) =>
+                  el("tr", {}, el("td", {}, proc.name || "--"), el("td", {}, String(proc.pid || "--")), el("td", {}, `${Number(proc.cpu || 0).toFixed(1)}%`), el("td", {}, proc.memory_text || serverBytes(proc.memory))),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+async function saveServerConfig() {
+  try {
+    const data = await apiPost("status/config/save", { config: state.serverConfig || {} });
+    state.serverConfig = data.config || state.serverConfig;
+    toast("服务器状态配置已保存", "success");
+    state.server = await apiGet("status/overview");
+    renderServer();
+  } catch (error) {
+    toast(cleanError(error), "error", 5000);
+  }
+}
+
+async function uploadServerImage(file) {
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = async () => {
+    try {
+      const data = await apiPost("status/image/save", {
+        name: file.name,
+        mime: file.type,
+        data: String(reader.result || ""),
+      });
+      state.serverImage = data.image || { exists: false };
+      state.serverImagePreview = data.preview || "";
+      toast("状态图片已保存", "success");
+      renderServer();
+    } catch (error) {
+      toast(cleanError(error), "error", 5000);
+    }
+  };
+  reader.readAsDataURL(file);
+}
+
+async function deleteServerImage() {
+  try {
+    await apiPost("status/image/delete", {});
+    state.serverImage = { exists: false };
+    state.serverImagePreview = "";
+    toast("状态图片已删除", "success");
+    renderServer();
+  } catch (error) {
+    toast(cleanError(error), "error", 5000);
+  }
+}
+
+function renderServerConfig() {
+  const config = state.serverConfig || {};
+  const image = state.serverImage || {};
+  const input = (key, label, hint, attrs = {}) =>
+    el(
+      "label",
+      { class: "status-config-row" },
+      el("span", {}, el("strong", {}, label), hint ? el("small", {}, hint) : null),
+      el("input", {
+        type: "number",
+        value: config[key] ?? "",
+        ...attrs,
+        onInput: (event) => {
+          state.serverConfig[key] = Number(event.target.value);
+        },
+      }),
+    );
+  const toggle = (key, label, hint) =>
+    el(
+      "label",
+      { class: "status-config-row" },
+      el("span", {}, el("strong", {}, label), hint ? el("small", {}, hint) : null),
+      el("input", {
+        type: "checkbox",
+        checked: Boolean(config[key]),
+        onChange: (event) => {
+          state.serverConfig[key] = event.target.checked;
+        },
+      }),
+    );
+  return el(
+    "section",
+    { class: "card status-config-card", id: "server-config" },
+    el("div", { class: "card-head" }, el("div", { class: "card-head-icon" }, icon("settings", 16)), el("div", { class: "card-head-copy" }, el("h2", { class: "card-title" }, "服务器状态配置"), el("p", { class: "card-subtitle" }, "开关、采样与毛玻璃"))),
+    el(
+      "div",
+      { class: "card-body stack" },
+      el(
+        "div",
+        { class: "status-config-grid" },
+        toggle("enabled", "启用服务器状态采集", "关闭后停止采样，历史仍保留"),
+        input("sample_seconds", "采样间隔", "15-300 秒", { min: 15, max: 300 }),
+        input("glass_opacity", "卡片透明度", "20-100%", { min: 20, max: 100 }),
+        input("glass_blur", "毛玻璃模糊", "0-30，0 为关闭", { min: 0, max: 30 }),
+      ),
+      el(
+        "div",
+        { class: "status-image-row" },
+        el(
+          "div",
+          { class: "status-image-preview", style: state.serverImagePreview ? `background-image:url('${state.serverImagePreview}')` : "" },
+          state.serverImagePreview ? null : icon("image", 22),
+        ),
+        el(
+          "div",
+          { class: "status-image-copy" },
+          el("strong", {}, "状态图片"),
+          el("small", {}, image.exists ? `${image.name || "已上传"}，PNG/JPG，最大 5MB` : "支持 PNG/JPG，最大 5MB"),
+          el(
+            "div",
+            { class: "status-image-actions" },
+            el("label", { class: "btn btn-ghost btn-sm" }, "上传图片", el("input", { type: "file", accept: "image/png,image/jpeg", hidden: true, onChange: (event) => uploadServerImage(event.target.files?.[0]) })),
+            image.exists ? button("删除", { className: "btn-danger btn-sm", onClick: deleteServerImage }) : null,
+          ),
+        ),
+      ),
+      el("div", { class: "status-config-actions" }, button("保存配置", { className: "btn-primary", onClick: saveServerConfig })),
+    ),
+  );
 }
 
 function renderMonitor() {
   const page = document.getElementById("page");
   if (!page) return;
-  const view = state.monitorView === "risk" ? "risk" : "spam";
+  const view = ["risk", "server"].includes(state.monitorView)
+    ? state.monitorView
+    : "spam";
   const subnav = el(
     "div",
     { class: "segmented monitor-subnav", role: "tablist", "aria-label": "监控分类" },
@@ -2651,11 +2954,47 @@ function renderMonitor() {
       },
       "风险消息撤回",
     ),
+    el(
+      "button",
+      {
+        type: "button",
+        class: view === "server" ? "is-active" : "",
+        onclick: () => switchMonitorView("server"),
+      },
+      "服务器运行状态",
+    ),
   );
   const content = el("div", { class: "monitor-content", id: "monitor-content" });
   page.replaceChildren(subnav, content, footer());
   if (view === "spam") renderSpam(content);
-  else renderRiskRecall(content);
+  else if (view === "risk") renderRiskRecall(content);
+  else renderServerEmbedded(content);
+}
+
+function renderServerEmbedded(container) {
+  const data = state.server || { ok: false, error: "状态尚未加载" };
+  const body =
+    data.ok === false
+      ? el(
+          "section",
+          { class: "card" },
+          el(
+            "div",
+            { class: "card-body" },
+            emptyInline("alert-triangle", "服务器状态不可用", data.error || "请检查 psutil 依赖"),
+          ),
+        )
+      : renderServerOverview(data);
+  container.replaceChildren(
+    el(
+      "div",
+      { class: "server-embedded-head" },
+      el("div", {}, el("h2", { class: "card-title" }, "服务器运行状态"), el("p", { class: "card-subtitle" }, "QQ 官方平台在线状态、宿主机资源和网络")),
+      el("div", { class: "server-live" }, el("i", { class: `live-dot ${data.bot?.online ? "is-on" : ""}` }), data.bot?.online ? "官方平台在线" : "官方平台离线", el("span", {}, data.ts ? `更新于 ${formatTime(data.ts)}` : "")),
+    ),
+    body,
+    renderServerConfig(),
+  );
 }
 
 function applyRecallData(data) {

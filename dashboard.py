@@ -53,7 +53,7 @@ except Exception as exc:  # pragma: no cover - 仅在旧的 AstrBot 上触发
 
 PLUGIN_NAME = "astrbot_plugin_qq_group_manage"
 PLUGIN_DISPLAY_NAME = "QQ官机群管"
-PLUGIN_VERSION = "2.9.8"
+PLUGIN_VERSION = "2.9.9"
 QQ_PLATFORMS = {"qq_official", "qq_official_webhook"}
 VIEW_NAME = "console"
 SECTION_ORDER = (
@@ -247,6 +247,15 @@ class DashboardAPI:
             ("groups/note", self.update_group_note, ["POST"], "保存群备注"),
             ("spam", self.get_spam, ["GET"], "刷屏监控状态"),
             ("recall", self.get_recall, ["GET"], "风险消息撤回状态"),
+            ("status/overview", self.get_server_status, ["GET"], "服务器运行状态"),
+            ("status/history", self.get_server_history, ["GET"], "服务器历史趋势"),
+            ("status/events", self.get_server_events, ["GET"], "服务器异常事件"),
+            ("status/reports", self.get_server_reports, ["GET"], "服务器日报"),
+            ("status/config", self.get_server_config, ["GET"], "服务器状态配置"),
+            ("status/config/save", self.save_server_config, ["POST"], "保存服务器状态配置"),
+            ("status/image", self.get_server_image, ["GET"], "服务器状态图片"),
+            ("status/image/save", self.save_server_image, ["POST"], "保存服务器状态图片"),
+            ("status/image/delete", self.delete_server_image, ["POST"], "删除服务器状态图片"),
             ("broadcast/send", self.send_broadcast, ["POST"], "群广播"),
             ("panel/images", self.get_panel_images, ["GET"], "群管面板图片"),
             ("panel/images/save", self.save_panel_image, ["POST"], "保存群管面板图片"),
@@ -1328,6 +1337,113 @@ class DashboardAPI:
             )
         except Exception as exc:
             return self._error(exc, "读取风险消息撤回失败")
+
+    # ------------------------------------------------------------------
+    # Handler: 服务器运行状态
+    # ------------------------------------------------------------------
+    async def get_server_status(self) -> Any:
+        try:
+            service = self.plugin.server_status
+            data = await asyncio.to_thread(service.overview)
+            return json_response(data)
+        except Exception as exc:
+            return self._error(exc, "读取服务器状态失败")
+
+    async def get_server_history(self) -> Any:
+        try:
+            range_key = str(request.query.get("range") or "24h").strip().lower()
+            data = await asyncio.to_thread(
+                self.plugin.server_status.history, range_key
+            )
+            return json_response(data)
+        except Exception as exc:
+            return self._error(exc, "读取服务器历史失败")
+
+    async def get_server_events(self) -> Any:
+        try:
+            days = int(request.query.get("days") or 1)
+            data = await asyncio.to_thread(
+                self.plugin.server_status.events, days
+            )
+            return json_response(data)
+        except Exception as exc:
+            return self._error(exc, "读取服务器事件失败")
+
+    async def get_server_reports(self) -> Any:
+        try:
+            days = int(request.query.get("days") or 14)
+            data = await asyncio.to_thread(
+                self.plugin.server_status.reports, days
+            )
+            return json_response(data)
+        except Exception as exc:
+            return self._error(exc, "读取服务器日报失败")
+
+    async def get_server_config(self) -> Any:
+        try:
+            service = self.plugin.server_status
+            return json_response(
+                {
+                    "config": service.get_config(),
+                    "image": service.image_info(),
+                    "preview": service.image_preview(),
+                }
+            )
+        except Exception as exc:
+            return self._error(exc, "读取服务器状态配置失败")
+
+    async def save_server_config(self) -> Any:
+        try:
+            payload = await request.json(default={})
+            if not isinstance(payload, dict):
+                raise DashboardError("请求体格式不正确")
+            values = payload.get("config")
+            if not isinstance(values, dict):
+                raise DashboardError("config 必须是对象")
+            data = self.plugin.server_status.save_config(values)
+            return json_response({"config": data, "message": "保存成功"})
+        except Exception as exc:
+            return self._error(exc, "保存服务器状态配置失败")
+
+    async def get_server_image(self) -> Any:
+        try:
+            service = self.plugin.server_status
+            return json_response(
+                {
+                    "image": service.image_info(),
+                    "preview": service.image_preview(),
+                }
+            )
+        except Exception as exc:
+            return self._error(exc, "读取服务器状态图片失败")
+
+    async def save_server_image(self) -> Any:
+        try:
+            payload = await request.json(default={})
+            if not isinstance(payload, dict):
+                raise DashboardError("请求体格式不正确")
+            mime = str(payload.get("mime") or "").strip().lower()
+            name = str(payload.get("name") or "status.png").strip()
+            raw_data = str(payload.get("data") or "").strip()
+            if "," in raw_data and raw_data.startswith("data:"):
+                raw_data = raw_data.split(",", 1)[1]
+            try:
+                raw = base64.b64decode(raw_data, validate=True)
+            except Exception as exc:
+                raise DashboardError("图片数据不是有效的 Base64") from exc
+            image = self.plugin.server_status.save_image(name, mime, raw)
+            return json_response(
+                {"image": image, "preview": self.plugin.server_status.image_preview()}
+            )
+        except Exception as exc:
+            return self._error(exc, "保存服务器状态图片失败")
+
+    async def delete_server_image(self) -> Any:
+        try:
+            changed = self.plugin.server_status.delete_image()
+            return json_response({"deleted": changed})
+        except Exception as exc:
+            return self._error(exc, "删除服务器状态图片失败")
 
     # ------------------------------------------------------------------
     # Handler: 入群申请
