@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import importlib
-import logging
 from typing import Any
 
-logger = logging.getLogger("astrbot")
+from astrbot.api import logger
 
 _DECODER: tuple[Any, Any] | None = None
 _IMPORT_ERROR: Exception | None = None
