@@ -4,6 +4,7 @@ import asyncio
 import base64
 import re
 import secrets
+import time
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -12,7 +13,7 @@ from urllib.parse import quote
 
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
-from astrbot.api.message_components import At, Plain, Reply
+from astrbot.api.message_components import At, Image, Plain, Reply
 from astrbot.api.star import Context, Star, StarTools, register
 from astrbot.core.star.session_plugin_manager import SessionPluginManager
 from astrbot.core.star.session_llm_manager import SessionServiceManager
@@ -39,6 +40,9 @@ from .settings_menu import (
     verify_summary,
     word_page,
 )
+from .spam_monitor import SpamMonitor
+from .qr_detect import decoder_available, ensure_decoder, is_qr_code
+from .recall_monitor import RecallMonitor
 from .verify_flow import JoinVerifier
 
 PLUGIN_NAME = "astrbot_plugin_qq_group_manage"
@@ -68,6 +72,21 @@ APPLY_SOURCE_NAMES = {
     "invite": "受邀加入",
     "admin_invite": "管理员邀请",
 }
+LINK_PATTERN = re.compile(
+    r"(?:(?:https?|ftp)://|www\.)[^\s<>\"'，。【】！？、]+"
+    r"|(?<![A-Za-z0-9])(?:[A-Za-z0-9](?:[A-Za-z0-9\-]{0,61}[A-Za-z0-9])?\.)+"
+    r"(?:com|cn|net|org|io|cc|top|xyz|me|tv|info|biz|vip|club|site|online|link|"
+    r"app|dev|ai|gg|so|co|us|uk|jp|hk|tw|ru|de|fr|eu|au|ca|in|kr|sg|asia|mobi|"
+    r"name|pro|shop|store|work|live|fun|space|website|tech|cloud|blog|wiki)"
+    r"(?![A-Za-z0-9])"
+    r"(?:/[^\s<>\"'，。【】！？、]*)?",
+    re.IGNORECASE,
+)
+
+
+def contains_link(text: str) -> bool:
+    """Whether the plain-text content contains a URL or a common domain name."""
+    return bool(LINK_PATTERN.search(text or ""))
 
 
 @dataclass(frozen=True)
@@ -101,7 +120,14 @@ FEATURES = (
     FeatureDefinition(
         "违禁词撤回", "enable_keyword_recall", "关键词管理", default=False
     ),
+    FeatureDefinition(
+        "链接消息撤回", "enable_link_recall", "关键词管理", default=False
+    ),
+    FeatureDefinition(
+        "二维码图片撤回", "enable_qr_recall", "关键词管理", default=False
+    ),
     FeatureDefinition("进群验证", "enable_join_verify", "进群验证", default=False),
+    FeatureDefinition("刷屏监控", "enable_anti_spam", "刷屏监控", default=False),
     FeatureDefinition("LLM禁言工具", "enable_mute_tool", "LLM 工具"),
     FeatureDefinition("LLM解禁工具", "enable_unmute_tool", "LLM 工具"),
     FeatureDefinition("LLM禁言状态工具", "enable_mute_status_tool", "LLM 工具"),
@@ -144,6 +170,10 @@ CONFIG_SECTIONS = {
     "enable_keyword_recall": "keyword_settings",
     "mute_keywords": "keyword_settings",
     "keyword_mute_duration": "keyword_settings",
+    "enable_link_recall": "keyword_settings",
+    "link_recall_notice": "keyword_settings",
+    "enable_qr_recall": "keyword_settings",
+    "qr_recall_notice": "keyword_settings",
     "enable_join_verify": "verify_settings",
     "verify_mode": "verify_settings",
     "arithmetic_ops": "verify_settings",
@@ -154,6 +184,14 @@ CONFIG_SECTIONS = {
     "verify_timeout_minutes": "verify_settings",
     "verify_timeout_action": "verify_settings",
     "verify_prompt": "verify_settings",
+    "enable_anti_spam": "spam_settings",
+    "spam_limit_1s": "spam_settings",
+    "spam_limit_1m": "spam_settings",
+    "spam_limit_1h": "spam_settings",
+    "spam_night_enabled": "spam_settings",
+    "spam_night_limit": "spam_settings",
+    "spam_mute_duration": "spam_settings",
+    "spam_recall_threshold": "spam_settings",
 }
 
 PANEL_FEATURE_KEYS = {
@@ -165,7 +203,7 @@ PANEL_FEATURE_KEYS = {
 LEGACY_CONFIG_KEYS = tuple(
     key
     for key in CONFIG_SECTIONS
-    if CONFIG_SECTIONS[key] not in {"keyword_settings", "verify_settings"}
+    if CONFIG_SECTIONS[key] not in {"keyword_settings", "verify_settings", "spam_settings"}
     and key
     not in {
         "enable_per_group_feature_settings",
@@ -486,7 +524,7 @@ def review_quote(event: AstrMessageEvent) -> set[str] | None:
     PLUGIN_NAME,
     "简单么么熊",
     "QQ 官方机器人群管理：禁言、入群申请审批、分群管理员与 LLM 工具",
-    "2.9.6",
+    "2.9.7",
 )
 class QQGroupAdminPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig) -> None:
@@ -511,8 +549,11 @@ class QQGroupAdminPlugin(Star):
         self._owned_parser_methods: dict[str, Any] = {}
         self._reviews_inflight: set[tuple[str, str, str]] = set()
         self._callback_guard = ReviewCallbackGuard()
+        self.spam_monitor = SpamMonitor()
+        self.recall_monitor = RecallMonitor()
         self.verifier = JoinVerifier(self)
         self._verify_task: asyncio.Task | None = None
+        self._qr_dep_task: asyncio.Task | None = None
         self.dashboard = DashboardAPI(self)
         try:
             self.dashboard_available = self.dashboard.register()
@@ -523,6 +564,25 @@ class QQGroupAdminPlugin(Star):
                 PLUGIN_NAME,
             )
         self._install_parser_patch()
+
+    async def initialize(self) -> None:
+        """Install the optional QR decoder in the background after activation."""
+        if decoder_available() or self._qr_dep_task is not None:
+            return
+        self._qr_dep_task = asyncio.create_task(self._install_qr_decoder())
+
+    async def _install_qr_decoder(self) -> None:
+        try:
+            if await ensure_decoder():
+                logger.info("[%s] 二维码识别依赖已就绪", PLUGIN_NAME)
+            else:
+                logger.warning(
+                    "[%s] 二维码识别依赖不可用，如需识别二维码请手动执行："
+                    "pip install zxing-cpp",
+                    PLUGIN_NAME,
+                )
+        finally:
+            self._qr_dep_task = None
 
     def _install_parser_patch(self) -> None:
         """Install parsers before QQ connections snapshot ConnectionState methods."""
@@ -1554,6 +1614,176 @@ class QQGroupAdminPlugin(Star):
         except Exception:
             logger.exception("[%s] 违禁词自动禁言失败", PLUGIN_NAME)
 
+    @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE, priority=150)
+    async def link_recall(self, event: AstrMessageEvent) -> None:
+        """撤回文字中包含链接或图片中的二维码。"""
+        if not self._is_qq_group(event):
+            return
+        link_enabled = self._event_feature_setting(event, "enable_link_recall", False)
+        qr_enabled = self._event_feature_setting(event, "enable_qr_recall", False)
+        if not link_enabled and not qr_enabled:
+            return
+        sender = event.get_sender_id()
+        if not sender or sender == event.get_self_id():
+            return
+        if self._can_manage(event):
+            return
+        text = "".join(
+            part.text for part in event.get_messages() if isinstance(part, Plain)
+        )
+        link_hit = link_enabled and contains_link(text)
+        qr_url = ""
+        if not link_hit and qr_enabled:
+            qr_url = await self._contains_qr_image(event)
+        qr_hit = bool(qr_url)
+        if not link_hit and not qr_hit:
+            return
+        if not await self._sdk_group_enabled(self._event_group_umo(event)):
+            return
+        event.stop_event()
+        message_id = getattr(event.message_obj, "message_id", "")
+        try:
+            api = QQGroupManageAPI(self._platform(event).client)
+            if not message_id:
+                raise ValueError("当前消息缺少消息 ID，无法撤回")
+            await asyncio.wait_for(
+                api.recall_group_message(event.get_group_id(), str(message_id)),
+                timeout=10,
+            )
+        except Exception:
+            logger.exception("[%s] 消息撤回失败", PLUGIN_NAME)
+            return
+        if link_hit:
+            match = LINK_PATTERN.search(text)
+            recall_kind = "link"
+            recall_content = match.group(0) if match else text[:1000]
+        else:
+            recall_kind = "qr"
+            recall_content = qr_url
+        try:
+            self.recall_monitor.record(
+                self._event_group_umo(event),
+                event.get_group_id(),
+                sender,
+                recall_kind,
+                recall_content,
+                str(message_id),
+                time.monotonic(),
+            )
+        except Exception:
+            logger.exception("[%s] 记录风险撤回失败", PLUGIN_NAME)
+        notice_key = "link_recall_notice" if link_hit else "qr_recall_notice"
+        notice = str(self._event_setting(event, notice_key, "") or "").strip()
+        if not notice:
+            return
+        try:
+            await asyncio.wait_for(
+                api.send_group_text(
+                    event.get_group_id(), notice, msg_id=str(message_id)
+                ),
+                timeout=10,
+            )
+        except Exception:
+            logger.exception("[%s] 撤回提醒发送失败", PLUGIN_NAME)
+
+    async def _contains_qr_image(self, event: AstrMessageEvent) -> str:
+        images = [part for part in event.get_messages() if isinstance(part, Image)]
+        if not images:
+            return ""
+        for part in images[:3]:
+            try:
+                path = await asyncio.wait_for(part.convert_to_file_path(), timeout=10)
+                if await asyncio.to_thread(is_qr_code, path):
+                    return str(
+                        getattr(part, "url", "")
+                        or getattr(part, "file", "")
+                        or "二维码图片"
+                    )
+            except Exception:
+                logger.exception("[%s] 二维码图片识别失败", PLUGIN_NAME)
+        return ""
+
+    def _spam_limits(self, event: AstrMessageEvent) -> dict[int, int]:
+        limits = {
+            1: max(0, int(self._event_setting(event, "spam_limit_1s", 5) or 0)),
+            60: max(0, int(self._event_setting(event, "spam_limit_1m", 20) or 0)),
+            3600: max(0, int(self._event_setting(event, "spam_limit_1h", 0) or 0)),
+        }
+        if self._event_feature_setting(event, "spam_night_enabled", False):
+            hour = datetime.now().hour
+            if hour >= 22 or hour < 6:
+                night = max(
+                    0, int(self._event_setting(event, "spam_night_limit", 0) or 0)
+                )
+                if night > 0 and (limits[60] <= 0 or night < limits[60]):
+                    limits[60] = night
+        return limits
+
+    @staticmethod
+    def _spam_exceeded(counts: dict[int, int], limits: dict[int, int]) -> str:
+        labels = {1: "最近1秒", 60: "最近1分钟", 3600: "最近1小时"}
+        for window in (1, 60, 3600):
+            limit = limits.get(window, 0)
+            if limit > 0 and counts.get(window, 0) > limit:
+                return f"{labels[window]}消息数超过 {limit} 条"
+        return ""
+
+    @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE, priority=160)
+    async def spam_guard(self, event: AstrMessageEvent) -> None:
+        """统计成员消息频率，超限时撤回近期消息并禁言。"""
+        if not self._is_qq_group(event):
+            return
+        if not self._event_feature_setting(event, "enable_anti_spam", False):
+            return
+        sender = event.get_sender_id()
+        if not sender or sender == event.get_self_id():
+            return
+        if self._can_manage(event):
+            return
+        group_umo = self._event_group_umo(event)
+        if not await self._sdk_group_enabled(group_umo):
+            return
+        now = time.monotonic()
+        message_id = str(getattr(event.message_obj, "message_id", "") or "")
+        counts = self.spam_monitor.record(group_umo, sender, message_id, now)
+        if self.spam_monitor.in_cooldown(group_umo, sender, now):
+            return
+        reason = self._spam_exceeded(counts, self._spam_limits(event))
+        if not reason:
+            return
+        try:
+            seconds = parse_duration(
+                str(self._event_setting(event, "spam_mute_duration", "300秒"))
+            )
+            self._validate_duration(seconds, group_umo)
+            if seconds <= 0:
+                raise ValueError("刷屏禁言时长必须大于 0")
+        except Exception:
+            logger.exception("[%s] 刷屏监控禁言时长无效", PLUGIN_NAME)
+            return
+        event.stop_event()
+        # 先记录处罚状态，避免同一时间窗口内重复撤回与禁言。
+        self.spam_monitor.mark_punished(group_umo, sender, now, seconds, reason)
+        threshold = max(
+            0, int(self._event_setting(event, "spam_recall_threshold", 10) or 0)
+        )
+        recall_ids = self.spam_monitor.recent_ids(group_umo, sender, threshold)
+        platform = self._platform(event)
+        if recall_ids and platform is not None:
+            api = QQGroupManageAPI(platform.client)
+            for recall_id in recall_ids:
+                try:
+                    await asyncio.wait_for(
+                        api.recall_group_message(event.get_group_id(), recall_id),
+                        timeout=10,
+                    )
+                except Exception:
+                    logger.exception("[%s] 刷屏消息撤回失败", PLUGIN_NAME)
+        try:
+            await self._mute(event, event.get_group_id(), sender, seconds)
+        except Exception:
+            logger.exception("[%s] 刷屏自动禁言失败", PLUGIN_NAME)
+
     def _review_action_match(self, event: AstrMessageEvent) -> re.Match | None:
         action_text = review_action_text(event)
         action_match = ACTION_RE.fullmatch(action_text)
@@ -1836,10 +2066,12 @@ class QQGroupAdminPlugin(Star):
     async def group_panel_command(self, event: AstrMessageEvent) -> None:
         if not self._is_qq_group(event):
             yield event.plain_result("该指令仅支持 QQ 官方机器人群聊。")
+            event.stop_event()
             return
         platform = self._platform(event)
         if platform is None or getattr(platform, "client", None) is None:
             yield event.plain_result("当前 QQ 平台不在线，无法打开菜单。")
+            event.stop_event()
             return
         try:
             await QQGroupManageAPI(platform.client).send_group_markdown(
@@ -1850,6 +2082,9 @@ class QQGroupAdminPlugin(Star):
         except Exception:
             logger.exception("[%s] 发送淼淼菜单失败", PLUGIN_NAME)
             yield event.plain_result("淼淼菜单发送失败，请稍后重试。")
+            event.stop_event()
+            return
+        event.stop_event()
 
     @filter.command("群管功能")
     async def group_feature_settings(
@@ -2612,6 +2847,8 @@ class QQGroupAdminPlugin(Star):
             tasks.append(self._patch_task)
         if self._verify_task is not None:
             tasks.append(self._verify_task)
+        if self._qr_dep_task is not None:
+            tasks.append(self._qr_dep_task)
         for task in tasks:
             task.cancel()
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -2621,6 +2858,9 @@ class QQGroupAdminPlugin(Star):
         self._sdk_event_tasks.clear()
         self._patch_task = None
         self._verify_task = None
+        self._qr_dep_task = None
+        self.spam_monitor.clear()
+        self.recall_monitor.clear()
 
 
 def render_member_notice(

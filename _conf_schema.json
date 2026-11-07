@@ -295,6 +295,37 @@
                 "condition": {
                   "enable_keyword_mute": true
                 }
+              },
+              "enable_link_recall": {
+                "description": "撤回链接消息",
+                "type": "bool",
+                "default": false,
+                "hint": "消息文字中出现网址或域名时自动撤回该消息。仅检查文字内容，图片、文件等其他消息不受影响；插件群管与机器人自身消息会被跳过。"
+              },
+              "link_recall_notice": {
+                "description": "撤回后发送提醒",
+                "type": "string",
+                "default": "",
+                "hint": "撤回链接消息后在群里发送的提醒文字。留空则不发送任何提醒。",
+                "condition": {
+                  "enable_link_recall": true
+                }
+              },
+              "enable_qr_recall": {
+                "description": "撤回二维码图片",
+                "type": "bool",
+                "default": false,
+                "hint": "图片消息经识别为二维码时自动撤回。只检查图片内容，不影响普通图片聊天；需要安装 zxing-cpp 依赖。",
+                "condition": null
+              },
+              "qr_recall_notice": {
+                "description": "撤回后发送提醒",
+                "type": "string",
+                "default": "",
+                "hint": "撤回二维码图片后在群里发送的提醒文字。留空则不发送任何提醒。",
+                "condition": {
+                  "enable_qr_recall": true
+                }
               }
             }
           },
@@ -408,6 +439,83 @@
                 "hint": "支持 {member_at}（艾特新成员）、{question}（题目和作答方式）、{rules}（限时与次数说明）。",
                 "condition": {
                   "enable_join_verify": true
+                }
+              }
+            }
+          },
+          "spam_settings": {
+            "description": "⑩ 刷屏监控",
+            "type": "object",
+            "hint": "按时间窗口统计每位成员的消息频率，超过任一窗口上限时自动撤回近期消息并禁言。上限填写 0 表示关闭该窗口限制。",
+            "items": {
+              "enable_anti_spam": {
+                "description": "启用刷屏监控",
+                "type": "bool",
+                "default": false,
+                "hint": "开启后实时统计每位成员最近 1 秒、1 分钟、1 小时的消息数量；命中任一上限时自动撤回其近期消息并按下方时长禁言。"
+              },
+              "spam_limit_1s": {
+                "description": "最近1秒上限",
+                "type": "int",
+                "default": 5,
+                "hint": "单位：条/秒，0 表示关闭该窗口限制。",
+                "condition": {
+                  "spam_settings.enable_anti_spam": true
+                }
+              },
+              "spam_limit_1m": {
+                "description": "最近1分钟上限",
+                "type": "int",
+                "default": 20,
+                "hint": "单位：条/分，0 表示关闭该窗口限制。",
+                "condition": {
+                  "spam_settings.enable_anti_spam": true
+                }
+              },
+              "spam_limit_1h": {
+                "description": "最近1小时上限",
+                "type": "int",
+                "default": 0,
+                "hint": "单位：条/小时，0 表示关闭该窗口限制。",
+                "condition": {
+                  "spam_settings.enable_anti_spam": true
+                }
+              },
+              "spam_night_enabled": {
+                "description": "夜间限速",
+                "type": "bool",
+                "default": false,
+                "hint": "开启后，在 22:00-06:00 使用更严格的最近 1 分钟上限。",
+                "condition": {
+                  "spam_settings.enable_anti_spam": true
+                }
+              },
+              "spam_night_limit": {
+                "description": "夜间阈值",
+                "type": "int",
+                "default": 0,
+                "hint": "夜间（22:00-06:00）最近 1 分钟上限，0 表示不调整。",
+                "condition": {
+                  "spam_settings.enable_anti_spam": true,
+                  "spam_settings.spam_night_enabled": true
+                }
+              },
+              "spam_mute_duration": {
+                "description": "禁言时长",
+                "type": "string",
+                "default": "300秒",
+                "hint": "支持 30秒、10分、2小时、1天2小时等写法；不能超过全局安全限制中的单次最长禁言。",
+                "condition": {
+                  "spam_settings.enable_anti_spam": true
+                }
+              },
+              "spam_recall_threshold": {
+                "description": "撤回阈值",
+                "type": "int",
+                "default": 10,
+                "hint": "触发刷屏时，撤回该成员最近的消息条数上限（含当前消息）。",
+                "condition": {
+                  "spam_settings.enable_anti_spam": true
                 }
               }
             }
@@ -716,6 +824,36 @@
                     "condition": {
                       "keyword_settings.enable_keyword_mute": true
                     }
+                  },
+                  "enable_link_recall": {
+                    "description": "撤回链接消息",
+                    "type": "bool",
+                    "default": false,
+                    "hint": "消息文字中出现网址或域名时自动撤回该消息。仅检查文字内容，图片、文件等其他消息不受影响；插件群管与机器人自身消息会被跳过。"
+                  },
+                  "link_recall_notice": {
+                    "description": "撤回后发送提醒",
+                    "type": "string",
+                    "default": "",
+                    "hint": "撤回链接消息后在群里发送的提醒文字。留空则不发送任何提醒。",
+                    "condition": {
+                      "keyword_settings.enable_link_recall": true
+                    }
+                  },
+                  "enable_qr_recall": {
+                    "description": "撤回二维码图片",
+                    "type": "bool",
+                    "default": false,
+                    "hint": "图片消息经识别为二维码时自动撤回。只检查图片内容，不影响普通图片聊天；需要安装 zxing-cpp 依赖。"
+                  },
+                  "qr_recall_notice": {
+                    "description": "撤回后发送提醒",
+                    "type": "string",
+                    "default": "",
+                    "hint": "撤回二维码图片后在群里发送的提醒文字。留空则不发送任何提醒。",
+                    "condition": {
+                      "keyword_settings.enable_qr_recall": true
+                    }
                   }
                 },
                 "condition": {
@@ -832,6 +970,83 @@
                     "hint": "支持 {member_at}（艾特新成员）、{question}（题目和作答方式）、{rules}（限时与次数说明）。",
                     "condition": {
                       "enable_join_verify": true
+                    }
+                  }
+                }
+              },
+              "spam_settings": {
+                "description": "⑩ 刷屏监控",
+                "type": "object",
+                "hint": "按时间窗口统计每位成员的消息频率，超过任一窗口上限时自动撤回近期消息并禁言。上限填写 0 表示关闭该窗口限制。",
+                "items": {
+                  "enable_anti_spam": {
+                    "description": "启用刷屏监控",
+                    "type": "bool",
+                    "default": false,
+                    "hint": "开启后实时统计每位成员最近 1 秒、1 分钟、1 小时的消息数量；命中任一上限时自动撤回其近期消息并按下方时长禁言。"
+                  },
+                  "spam_limit_1s": {
+                    "description": "最近1秒上限",
+                    "type": "int",
+                    "default": 5,
+                    "hint": "单位：条/秒，0 表示关闭该窗口限制。",
+                    "condition": {
+                      "spam_settings.enable_anti_spam": true
+                    }
+                  },
+                  "spam_limit_1m": {
+                    "description": "最近1分钟上限",
+                    "type": "int",
+                    "default": 20,
+                    "hint": "单位：条/分，0 表示关闭该窗口限制。",
+                    "condition": {
+                      "spam_settings.enable_anti_spam": true
+                    }
+                  },
+                  "spam_limit_1h": {
+                    "description": "最近1小时上限",
+                    "type": "int",
+                    "default": 0,
+                    "hint": "单位：条/小时，0 表示关闭该窗口限制。",
+                    "condition": {
+                      "spam_settings.enable_anti_spam": true
+                    }
+                  },
+                  "spam_night_enabled": {
+                    "description": "夜间限速",
+                    "type": "bool",
+                    "default": false,
+                    "hint": "开启后，在 22:00-06:00 使用更严格的最近 1 分钟上限。",
+                    "condition": {
+                      "spam_settings.enable_anti_spam": true
+                    }
+                  },
+                  "spam_night_limit": {
+                    "description": "夜间阈值",
+                    "type": "int",
+                    "default": 0,
+                    "hint": "夜间（22:00-06:00）最近 1 分钟上限，0 表示不调整。",
+                    "condition": {
+                      "spam_settings.enable_anti_spam": true,
+                      "spam_settings.spam_night_enabled": true
+                    }
+                  },
+                  "spam_mute_duration": {
+                    "description": "禁言时长",
+                    "type": "string",
+                    "default": "300秒",
+                    "hint": "支持 30秒、10分、2小时、1天2小时等写法；不能超过全局安全限制中的单次最长禁言。",
+                    "condition": {
+                      "spam_settings.enable_anti_spam": true
+                    }
+                  },
+                  "spam_recall_threshold": {
+                    "description": "撤回阈值",
+                    "type": "int",
+                    "default": 10,
+                    "hint": "触发刷屏时，撤回该成员最近的消息条数上限（含当前消息）。",
+                    "condition": {
+                      "spam_settings.enable_anti_spam": true
                     }
                   }
                 }
@@ -1092,6 +1307,30 @@
         "type": "string",
         "default": "10分",
         "hint": "支持 30秒、10分、2小时、1天2小时；纯数字按分钟。必须大于 0，且不超过安全限制中的单次最长禁言秒数。"
+      },
+      "enable_link_recall": {
+        "description": "撤回链接消息",
+        "type": "bool",
+        "default": false,
+        "hint": "消息文字中出现网址或域名时自动撤回该消息。仅检查文字内容，图片、文件等其他消息不受影响；插件群管与机器人自身消息会被跳过。"
+      },
+      "link_recall_notice": {
+        "description": "撤回后发送提醒",
+        "type": "string",
+        "default": "",
+        "hint": "撤回链接消息后在群里发送的提醒文字。留空则不发送任何提醒。"
+      },
+      "enable_qr_recall": {
+        "description": "撤回二维码图片",
+        "type": "bool",
+        "default": false,
+        "hint": "图片消息经识别为二维码时自动撤回。只检查图片内容，不影响普通图片聊天；需要安装 zxing-cpp 依赖。"
+      },
+      "qr_recall_notice": {
+        "description": "撤回后发送提醒",
+        "type": "string",
+        "default": "",
+        "hint": "撤回二维码图片后在群里发送的提醒文字。留空则不发送任何提醒。"
       }
     },
     "invisible": true
@@ -1206,6 +1445,84 @@
         "hint": "支持 {member_at}（艾特新成员）、{question}（题目和作答方式）、{rules}（限时与次数说明）。",
         "condition": {
           "enable_join_verify": true
+        }
+      }
+    },
+    "invisible": true
+  },
+  "spam_settings": {
+    "description": "⑩ 刷屏监控",
+    "type": "object",
+    "hint": "按时间窗口统计每位成员的消息频率，超过任一窗口上限时自动撤回近期消息并禁言。上限填写 0 表示关闭该窗口限制。",
+    "items": {
+      "enable_anti_spam": {
+        "description": "启用刷屏监控",
+        "type": "bool",
+        "default": false,
+        "hint": "开启后实时统计每位成员最近 1 秒、1 分钟、1 小时的消息数量；命中任一上限时自动撤回其近期消息并按下方时长禁言。"
+      },
+      "spam_limit_1s": {
+        "description": "最近1秒上限",
+        "type": "int",
+        "default": 5,
+        "hint": "单位：条/秒，0 表示关闭该窗口限制。",
+        "condition": {
+          "enable_anti_spam": true
+        }
+      },
+      "spam_limit_1m": {
+        "description": "最近1分钟上限",
+        "type": "int",
+        "default": 20,
+        "hint": "单位：条/分，0 表示关闭该窗口限制。",
+        "condition": {
+          "enable_anti_spam": true
+        }
+      },
+      "spam_limit_1h": {
+        "description": "最近1小时上限",
+        "type": "int",
+        "default": 0,
+        "hint": "单位：条/小时，0 表示关闭该窗口限制。",
+        "condition": {
+          "enable_anti_spam": true
+        }
+      },
+      "spam_night_enabled": {
+        "description": "夜间限速",
+        "type": "bool",
+        "default": false,
+        "hint": "开启后，在 22:00-06:00 使用更严格的最近 1 分钟上限。",
+        "condition": {
+          "enable_anti_spam": true
+        }
+      },
+      "spam_night_limit": {
+        "description": "夜间阈值",
+        "type": "int",
+        "default": 0,
+        "hint": "夜间（22:00-06:00）最近 1 分钟上限，0 表示不调整。",
+        "condition": {
+          "enable_anti_spam": true,
+          "spam_night_enabled": true
+        }
+      },
+      "spam_mute_duration": {
+        "description": "禁言时长",
+        "type": "string",
+        "default": "300秒",
+        "hint": "支持 30秒、10分、2小时、1天2小时等写法；不能超过全局安全限制中的单次最长禁言。",
+        "condition": {
+          "enable_anti_spam": true
+        }
+      },
+      "spam_recall_threshold": {
+        "description": "撤回阈值",
+        "type": "int",
+        "default": 10,
+        "hint": "触发刷屏时，撤回该成员最近的消息条数上限（含当前消息）。",
+        "condition": {
+          "enable_anti_spam": true
         }
       }
     },

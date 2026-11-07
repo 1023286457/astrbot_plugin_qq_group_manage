@@ -16,6 +16,7 @@ GROUP_SECTIONS = (
     "limit_settings",
     "keyword_settings",
     "verify_settings",
+    "spam_settings",
 )
 SCHEMA = json.loads(
     Path(__file__).with_name("_conf_schema.json").read_text(encoding="utf-8")
@@ -173,6 +174,7 @@ class GroupConfig:
 
     def migrate(self, storage: Any, context: Any) -> list[str]:
         if int(self.config.get("config_layout_version", 0)) >= 2:
+            self._complete_global()
             self._complete_profiles()
             return []
         before = deepcopy(dict(self.config))
@@ -247,6 +249,33 @@ class GroupConfig:
             self.config.update(before)
             raise
         return unresolved
+
+    def _complete_global(self) -> None:
+        """Backfill newly added sections/keys into an existing v2 global config."""
+        before = deepcopy(dict(self.config))
+        changed = False
+        try:
+            management = self.config.setdefault("group_management", {})
+            if not isinstance(management, dict):
+                raise ValueError("group_management 配置格式错误")
+            global_settings = management.setdefault("global_settings", {})
+            if not isinstance(global_settings, dict):
+                raise ValueError("global_settings 配置格式错误")
+            for section in GROUP_SECTIONS:
+                values = global_settings.setdefault(section, {})
+                if not isinstance(values, dict):
+                    values = {}
+                    global_settings[section] = values
+                for key, value in defaults(SCHEMA[section]["items"]).items():
+                    if key not in values:
+                        values[key] = value
+                        changed = True
+            if changed:
+                self.save()
+        except Exception:
+            self.config.clear()
+            self.config.update(before)
+            raise
 
     def _complete_profiles(self) -> None:
         """AstrBot does not fill new fields inside existing template_list entries."""

@@ -8,14 +8,15 @@ const modalRoot = document.getElementById("modal-root");
 const toastRoot = document.getElementById("toast-root");
 
 const PLUGIN_NAME = "astrbot_plugin_qq_group_manage";
-const PLUGIN_VERSION = "2.9.6";
-const TAB_IDS = ["overview", "pending", "verify", "groups", "settings", "broadcast", "data"];
+const PLUGIN_VERSION = "2.9.7";
+const TAB_IDS = ["overview", "pending", "verify", "groups", "spam", "settings", "broadcast", "data"];
 
 const TABS = [
   { id: "overview", label: "总览", short: "总览", icon: "layout-dashboard" },
   { id: "pending", label: "入群审批", short: "审批", icon: "inbox", badge: "pending" },
   { id: "verify", label: "进群验证", short: "验证", icon: "badge-check", badge: "verify" },
   { id: "groups", label: "群组", short: "群组", icon: "users" },
+  { id: "spam", label: "监控", short: "监控", icon: "activity" },
   { id: "settings", label: "配置", short: "配置", icon: "settings" },
   { id: "broadcast", label: "群广播", short: "广播", icon: "megaphone" },
   { id: "data", label: "数据", short: "数据", icon: "database" },
@@ -106,6 +107,12 @@ const ICONS = {
     '<path d="m3 11 18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/>',
   image:
     '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/>',
+  activity:
+    '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
+  link:
+    '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
+  "qr-code":
+    '<rect width="5" height="5" x="3" y="3" rx="1"/><rect width="5" height="5" x="16" y="3" rx="1"/><rect width="5" height="5" x="3" y="16" rx="1"/><path d="M21 16h-3a2 2 0 0 0-2 2v3"/><path d="M21 21v.01"/><path d="M12 7v3a2 2 0 0 1-2 2H7"/><path d="M3 12h.01"/><path d="M12 3h.01"/><path d="M12 16v.01"/><path d="M16 12h1"/><path d="M21 12v.01"/><path d="M12 21v-1"/>',
 };
 
 function icon(name, size = 18) {
@@ -127,6 +134,13 @@ const state = {
   verifications: null,
   groups: null,
   groupDetail: null,
+  spam: null,
+  recall: null,
+  monitorView: "spam",
+  recallScope: "global",
+  recallGroup: "",
+  recallConfig: null,
+  recallDirty: false,
   selectedGroup: "",
   config: null,
   configScope: "global",
@@ -527,6 +541,7 @@ async function boot() {
   state.tab = tabFromHash();
   await navigate(state.tab, { updateHash: false });
   window.setInterval(poll, 60_000);
+  window.setInterval(refreshSpamSilent, 5_000);
 }
 
 function renderFatal(title, message) {
@@ -903,6 +918,15 @@ async function loadTab(tab) {
     if (state.selectedGroup) await loadGroupDetail(state.selectedGroup, seq);
     return;
   }
+  if (tab === "spam") {
+    const data = await apiGet("spam");
+    if (seq !== state.requestSeq) return;
+    state.spam = data;
+    await loadRecallData(seq);
+    if (seq !== state.requestSeq) return;
+    renderMonitor();
+    return;
+  }
   if (tab === "settings") {
     if (!state.groups) {
       try {
@@ -974,9 +998,30 @@ async function refreshOverviewSilent() {
   }
 }
 
+async function refreshSpamSilent() {
+  if (state.tab !== "spam" || document.visibilityState !== "visible") return;
+  if (state.busy.size > 0 || modalApi) return;
+  if (state.monitorView === "risk" && state.recallDirty) return;
+  const active = document.activeElement;
+  if (
+    active &&
+    ["INPUT", "TEXTAREA"].includes(active.tagName) &&
+    active.closest(".monitor-content")
+  ) {
+    return;
+  }
+  try {
+    state.spam = await apiGet("spam");
+    await loadRecallData();
+    if (state.tab === "spam") renderMonitor();
+  } catch {
+    /* 实时刷新失败时不打断当前页面 */
+  }
+}
+
 async function poll() {
   if (document.visibilityState !== "visible") return;
-  if (!["overview", "pending", "verify"].includes(state.tab)) return;
+  if (!["overview", "pending", "verify", "spam"].includes(state.tab)) return;
   if (state.busy.size > 0 || modalApi) return;
   const active = document.activeElement;
   if (
@@ -2534,6 +2579,703 @@ function settingsDirty() {
   return !deepEqual(state.formValues, state.initialValues);
 }
 
+/* ------------------------------------------------------------------ */
+/* 刷屏监控                                                           */
+/* ------------------------------------------------------------------ */
+
+function shortId(value) {
+  const text = String(value || "");
+  if (text.length <= 14) return text || "—";
+  return `${text.slice(0, 8)}…${text.slice(-4)}`;
+}
+
+function spamStatCard(iconName, label, value, hint, tone) {
+  return el(
+    "article",
+    { class: "stat-card" },
+    el("div", { class: `stat-icon ${tone || ""}` }, icon(iconName, 18)),
+    el(
+      "div",
+      { class: "stat-copy" },
+      el("p", { class: "stat-label" }, label),
+      el("p", { class: "stat-value" }, String(value)),
+      el("p", { class: "stat-hint" }, hint),
+    ),
+  );
+}
+
+function spamLimitItem(label, value, hint) {
+  return el(
+    "div",
+    { class: "spam-limit-item" },
+    el("span", { class: "spam-limit-label" }, label),
+    el("strong", { class: "spam-limit-value" }, String(value)),
+    hint ? el("span", { class: "spam-limit-hint" }, hint) : null,
+  );
+}
+
+const RECALL_CONFIG_KEYS = [
+  "enable_link_recall",
+  "link_recall_notice",
+  "enable_qr_recall",
+  "qr_recall_notice",
+];
+
+function switchMonitorView(view) {
+  state.monitorView = view === "risk" ? "risk" : "spam";
+  renderMonitor();
+}
+
+function renderMonitor() {
+  const page = document.getElementById("page");
+  if (!page) return;
+  const view = state.monitorView === "risk" ? "risk" : "spam";
+  const subnav = el(
+    "div",
+    { class: "segmented monitor-subnav", role: "tablist", "aria-label": "监控分类" },
+    el(
+      "button",
+      {
+        type: "button",
+        class: view === "spam" ? "is-active" : "",
+        onclick: () => switchMonitorView("spam"),
+      },
+      "刷屏监控",
+    ),
+    el(
+      "button",
+      {
+        type: "button",
+        class: view === "risk" ? "is-active" : "",
+        onclick: () => switchMonitorView("risk"),
+      },
+      "风险消息撤回",
+    ),
+  );
+  const content = el("div", { class: "monitor-content", id: "monitor-content" });
+  page.replaceChildren(subnav, content, footer());
+  if (view === "spam") renderSpam(content);
+  else renderRiskRecall(content);
+}
+
+function applyRecallData(data) {
+  state.recall = data;
+  state.recallConfig = clone(data.config || {});
+  state.recallDirty = false;
+  if (!data.per_group) {
+    state.recallScope = "global";
+    state.recallGroup = "";
+    return;
+  }
+  const groups = data.groups || [];
+  if (
+    state.recallScope === "group" &&
+    !groups.some((group) => group.umo === state.recallGroup)
+  ) {
+    state.recallGroup = groups[0]?.umo || "";
+  }
+}
+
+async function loadRecallData(seq) {
+  const umo = state.recallScope === "group" ? state.recallGroup : "";
+  const data = await apiGet("recall", umo ? { umo } : undefined);
+  if (seq !== undefined && seq !== state.requestSeq) return;
+  applyRecallData(data);
+}
+
+async function reloadRecallView() {
+  try {
+    await loadRecallData();
+    renderMonitor();
+  } catch (error) {
+    toast(cleanError(error), "error");
+  }
+}
+
+async function switchRecallScope(scope) {
+  state.recallScope = scope === "group" ? "group" : "global";
+  if (state.recallScope === "group" && !state.recallGroup) {
+    state.recallGroup = state.recall?.groups?.[0]?.umo || "";
+  }
+  await reloadRecallView();
+}
+
+async function selectRecallGroup(umo) {
+  state.recallGroup = umo;
+  await reloadRecallView();
+}
+
+async function saveRecallConfig() {
+  if (!state.recallConfig) return;
+  const values = {};
+  for (const key of RECALL_CONFIG_KEYS) {
+    values[key] = state.recallConfig[key];
+  }
+  const groupScope = Boolean(state.recall?.per_group) && state.recallScope === "group";
+  const scope = groupScope ? "group" : "global";
+  try {
+    const result = await apiPost("config/save", {
+      scope,
+      umo: groupScope ? state.recallGroup : "",
+      values,
+    });
+    toast(result?.message || "风险消息撤回配置已保存");
+    await loadRecallData();
+    renderMonitor();
+  } catch (error) {
+    toast(cleanError(error), "error", 5000);
+  }
+}
+
+function recallFieldRow(label, hint, control) {
+  return el(
+    "div",
+    { class: "field" },
+    el(
+      "div",
+      {},
+      el("p", { class: "field-label" }, label),
+      hint ? el("p", { class: "field-hint" }, hint) : null,
+    ),
+    el("div", { class: "field-control" }, control),
+  );
+}
+
+function recallToggle(label, value, onChange) {
+  const statusLabel = el("p", { class: "field-label" }, value ? "已开启" : "已关闭");
+  const toggle = el("button", {
+    class: "switch",
+    type: "button",
+    role: "switch",
+    "aria-checked": value ? "true" : "false",
+    "aria-label": label,
+    onclick: () => {
+      const next = toggle.getAttribute("aria-checked") !== "true";
+      toggle.setAttribute("aria-checked", next ? "true" : "false");
+      statusLabel.textContent = next ? "已开启" : "已关闭";
+      onChange(next);
+    },
+  });
+  return el(
+    "div",
+    { class: "switch-row" },
+    toggle,
+    el(
+      "div",
+      { class: "switch-row-copy" },
+      statusLabel,
+      el("p", { class: "field-hint" }, "点击切换"),
+    ),
+  );
+}
+
+function recallTextInput(value, placeholder, onChange) {
+  const input = el("input", {
+    type: "text",
+    placeholder,
+    oninput: (event) => onChange(event.target.value),
+  });
+  input.value = value || "";
+  return input;
+}
+
+function recallContentNode(row) {
+  const content = String(row.content || "").trim();
+  if (!content) return el("span", { class: "muted" }, "—");
+  if (row.kind === "qr") {
+    if (/^https?:\/\//i.test(content)) {
+      return el(
+        "div",
+        { class: "recall-qr" },
+        el("img", {
+          class: "recall-qr-thumb",
+          src: content,
+          alt: "二维码图片",
+          loading: "lazy",
+          onerror: (event) => {
+            event.target.style.display = "none";
+          },
+        }),
+        el(
+          "a",
+          {
+            class: "recall-link",
+            href: content,
+            target: "_blank",
+            rel: "noreferrer",
+          },
+          "查看二维码图片",
+        ),
+      );
+    }
+    return el("span", {}, "二维码图片");
+  }
+  if (/^https?:\/\//i.test(content)) {
+    const display = content.length > 60 ? `${content.slice(0, 57)}…` : content;
+    return el(
+      "a",
+      {
+        class: "recall-link",
+        href: content,
+        target: "_blank",
+        rel: "noreferrer",
+        title: content,
+      },
+      display,
+    );
+  }
+  const display = content.length > 60 ? `${content.slice(0, 57)}…` : content;
+  return el("span", { class: "recall-text", title: content }, display);
+}
+
+function renderRiskRecall(target) {
+  const data = state.recall;
+  if (!target) return;
+  if (!data) {
+    target.replaceChildren(el("p", { class: "muted" }, "正在加载风险撤回记录…"));
+    return;
+  }
+  const stats = data.stats || {};
+  const rows = data.rows || [];
+  const config = state.recallConfig || data.config || {};
+  const perGroup = Boolean(data.per_group);
+  const groupScope = perGroup && state.recallScope === "group";
+
+  const cards = el(
+    "section",
+    { class: "stat-grid" },
+    statCard(
+      "shield-check",
+      "风险撤回总数",
+      stats.total || 0,
+      "最近保留的撤回记录",
+      "is-info",
+    ),
+    statCard("link", "链接撤回", stats.link_count || 0, "文字中包含链接的消息", ""),
+    statCard("qr-code", "二维码撤回", stats.qr_count || 0, "图片中识别到二维码", ""),
+    statCard(
+      "users",
+      "涉及群数",
+      stats.tracked_groups || 0,
+      "出现过风险消息的群",
+      "is-warning",
+    ),
+  );
+
+  const table = rows.length
+    ? el(
+        "div",
+        { class: "spam-table-wrap" },
+        el(
+          "table",
+          { class: "spam-table" },
+          el(
+            "thead",
+            {},
+            el(
+              "tr",
+              {},
+              ...["时间", "群号", "用户ID", "类型", "内容"].map((heading) =>
+                el("th", {}, heading),
+              ),
+            ),
+          ),
+          el(
+            "tbody",
+            {},
+            ...rows.map((row) =>
+              el(
+                "tr",
+                {},
+                el("td", { class: "spam-mono" }, row.time || "—"),
+                el("td", { class: "spam-mono" }, row.group_id || "—"),
+                el(
+                  "td",
+                  { class: "spam-mono", title: row.user_id || "" },
+                  shortId(row.user_id),
+                ),
+                el(
+                  "td",
+                  {},
+                  el(
+                    "span",
+                    {
+                      class: `spam-status is-${row.kind === "qr" ? "warning" : "info"}`,
+                    },
+                    row.kind_label || "—",
+                  ),
+                ),
+                el("td", { class: "recall-content" }, recallContentNode(row)),
+              ),
+            ),
+          ),
+        ),
+      )
+    : emptyInline(
+        "shield-check",
+        "暂无风险撤回记录",
+        "开启链接或二维码撤回后，被撤回的消息会显示在这里。",
+      );
+
+  const tableCard = el(
+    "section",
+    { class: "card" },
+    cardHead(
+      "activity",
+      "最近撤回记录",
+      rows.length ? `共 ${rows.length} 条` : "等待风险消息",
+      iconButton("refresh-cw", "刷新", () => refreshCurrent(true), {
+        className: "icon-btn",
+        size: 14,
+      }),
+    ),
+    el("div", { class: "card-body" }, table),
+  );
+
+  const saveButton = button(
+    "保存配置",
+    { className: "btn-primary btn-sm", onClick: saveRecallConfig },
+    icon("check", 14),
+    el("span", {}, "保存配置"),
+  );
+  const scopeSwitch = perGroup
+    ? el(
+        "div",
+        { class: "segmented", role: "tablist", "aria-label": "撤回配置范围" },
+        el(
+          "button",
+          {
+            type: "button",
+            class: state.recallScope === "global" ? "is-active" : "",
+            onclick: () => switchRecallScope("global"),
+          },
+          "全局配置",
+        ),
+        el(
+          "button",
+          {
+            type: "button",
+            class: state.recallScope === "group" ? "is-active" : "",
+            onclick: () => switchRecallScope("group"),
+          },
+          "分群配置",
+        ),
+      )
+    : null;
+  const groupSelect = groupScope
+    ? el(
+        "select",
+        {
+          class: "select",
+          onchange: (event) => selectRecallGroup(event.target.value),
+        },
+        ...((data.groups || []).length
+          ? (data.groups || []).map((group) =>
+              el("option", { value: group.umo }, group.label || group.umo),
+            )
+          : [el("option", { value: "" }, "暂无群组")]),
+      )
+    : null;
+  if (groupSelect) groupSelect.value = state.recallGroup;
+
+  const configCard = el(
+    "section",
+    { class: "card" },
+    cardHead(
+      "shield-check",
+      "风险消息撤回配置",
+      groupScope
+        ? "仅影响当前选中的群"
+        : perGroup
+          ? "全局默认值，分群可单独覆盖"
+          : "全局生效",
+      saveButton,
+    ),
+    el(
+      "div",
+      { class: "card-body" },
+      scopeSwitch
+        ? el(
+            "div",
+            { class: "toolbar" },
+            scopeSwitch,
+            groupSelect,
+            el(
+              "span",
+              { class: "muted", style: "margin-left:auto;font-size:10.5px" },
+              groupScope ? "仅影响当前群" : "作为所有群的默认值",
+            ),
+          )
+        : null,
+      el(
+        "div",
+        { class: "field-list" },
+        recallFieldRow(
+          "撤回链接消息",
+          "消息文字中出现网址或域名时自动撤回。",
+          recallToggle(
+            "撤回链接消息",
+            Boolean(config.enable_link_recall),
+            (value) => {
+              config.enable_link_recall = value;
+              state.recallDirty = true;
+            },
+          ),
+        ),
+        recallFieldRow(
+          "撤回后发送提醒",
+          "链接消息撤回成功后发送的文字，留空则不发送。",
+          recallTextInput(
+            config.link_recall_notice,
+            "留空则不发送提醒",
+            (value) => {
+              config.link_recall_notice = value;
+              state.recallDirty = true;
+            },
+          ),
+        ),
+        recallFieldRow(
+          "撤回二维码图片",
+          "图片经识别为二维码时自动撤回，需要 zxing-cpp 依赖。",
+          recallToggle(
+            "撤回二维码图片",
+            Boolean(config.enable_qr_recall),
+            (value) => {
+              config.enable_qr_recall = value;
+              state.recallDirty = true;
+            },
+          ),
+        ),
+        recallFieldRow(
+          "撤回后发送提醒",
+          "二维码图片撤回成功后发送的文字，留空则不发送。",
+          recallTextInput(
+            config.qr_recall_notice,
+            "留空则不发送提醒",
+            (value) => {
+              config.qr_recall_notice = value;
+              state.recallDirty = true;
+            },
+          ),
+        ),
+      ),
+      el(
+        "p",
+        { class: "muted", style: "font-size:10.5px;margin-top:12px" },
+        "链接提醒与二维码提醒分开保存；只有撤回成功时才会发送对应提醒。",
+      ),
+    ),
+  );
+
+  target.replaceChildren(
+    ...[
+      perGroup
+        ? el(
+            "div",
+            { class: "banner is-info" },
+            icon("info", 15),
+            el(
+              "span",
+              {},
+              "当前使用分群配置：可在下方切换全局或单个群的撤回设置。",
+            ),
+          )
+        : null,
+      cards,
+      tableCard,
+      configCard,
+    ].filter(Boolean),
+  );
+}
+
+function renderSpam(host) {
+  const data = state.spam;
+  const target = host || document.getElementById("monitor-content");
+  if (!target) return;
+  if (!data) {
+    target.replaceChildren(el("p", { class: "muted" }, "正在加载监控数据…"));
+    return;
+  }
+  const stats = data.stats || {};
+  const limits = data.limits || {};
+  const rows = data.rows || [];
+  const enabled = Boolean(stats.enabled ?? data.enabled);
+  const perGroup = Boolean(data.per_group);
+  const limitNumber = (value) => Math.max(0, Number(value) || 0);
+  const rate = (value, unit) => {
+    const number = limitNumber(value);
+    return number > 0 ? `${number} ${unit}` : "关闭";
+  };
+  const nightEnabled = Boolean(limits.spam_night_enabled);
+  const nightLimit = limitNumber(limits.spam_night_limit);
+
+  const cards = el(
+    "section",
+    { class: "stat-grid" },
+    spamStatCard(
+      "shield-check",
+      "防刷屏状态",
+      enabled ? "已启用" : "未启用",
+      enabled ? "命中阈值自动撤回并禁言" : "可在配置中开启",
+      enabled ? "is-success" : "is-warning",
+    ),
+    statCard(
+      "users",
+      "追踪群数",
+      stats.tracked_groups || 0,
+      "最近一小时有消息的群",
+      "is-info",
+    ),
+    statCard(
+      "activity",
+      "追踪用户",
+      stats.tracked_users || 0,
+      "最近一小时有消息的成员",
+      "",
+    ),
+    statCard(
+      "timer",
+      "活跃用户",
+      stats.active_users || 0,
+      "最近一分钟内发过言",
+      "is-warning",
+    ),
+  );
+
+  const limitGrid = el(
+    "div",
+    { class: "spam-limit-grid" },
+    spamLimitItem("最近1秒上限", rate(limits.spam_limit_1s, "条/秒"), "0 表示关闭该窗口"),
+    spamLimitItem("最近1分钟上限", rate(limits.spam_limit_1m, "条/分"), "0 表示关闭该窗口"),
+    spamLimitItem("最近1小时上限", rate(limits.spam_limit_1h, "条/小时"), "0 表示关闭该窗口"),
+    spamLimitItem(
+      "夜间限速",
+      nightEnabled ? "已开启" : "未开启",
+      nightEnabled ? "22:00-06:00 生效" : "点击配置可开启",
+    ),
+    spamLimitItem(
+      "夜间阈值",
+      nightEnabled && nightLimit > 0 ? `${nightLimit} 条/分` : "--",
+      nightEnabled ? "夜间最近1分钟上限" : "未开启夜间限速",
+    ),
+    spamLimitItem(
+      "禁言时长",
+      limits.spam_mute_duration || "300秒",
+      "触发刷屏后的禁言时间",
+    ),
+    spamLimitItem(
+      "撤回阈值",
+      `${limitNumber(limits.spam_recall_threshold)} 条`,
+      "触发时撤回最近消息的条数",
+    ),
+  );
+
+  const limitCard = el(
+    "section",
+    { class: "card" },
+    cardHead(
+      "gauge",
+      "当前速率限制配置",
+      perGroup ? "分群模式：以下为全局默认值，各群可单独覆盖" : "全局生效",
+      button("去配置", {
+        className: "card-link",
+        onClick: () => {
+          state.configScope = "global";
+          navigate("settings");
+        },
+      }),
+    ),
+    el("div", { class: "card-body" }, limitGrid),
+  );
+
+  const table = rows.length
+    ? el(
+        "div",
+        { class: "spam-table-wrap" },
+        el(
+          "table",
+          { class: "spam-table" },
+          el(
+            "thead",
+            {},
+            el(
+              "tr",
+              {},
+              ...["群号", "用户ID", "追踪队列", "最近1秒", "最近1分钟", "最近1小时", "状态"].map(
+                (heading) => el("th", {}, heading),
+              ),
+            ),
+          ),
+          el(
+            "tbody",
+            {},
+            ...rows.map((row) =>
+              el(
+                "tr",
+                {},
+                el("td", { class: "spam-mono" }, row.group_id || "—"),
+                el("td", { class: "spam-mono", title: row.user_id || "" }, shortId(row.user_id)),
+                el("td", {}, `${row.queue || 0} 条`),
+                el("td", {}, String(row.recent_1s || 0)),
+                el("td", {}, String(row.recent_1m || 0)),
+                el("td", {}, String(row.recent_1h || 0)),
+                el(
+                  "td",
+                  {},
+                  el(
+                    "span",
+                    { class: `spam-status is-${row.status_key || "normal"}` },
+                    row.status || "正常",
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      )
+    : emptyInline("activity", "暂无活跃追踪数据", "群成员发言后会在这里实时显示消息频率。");
+
+  const trackCard = el(
+    "section",
+    { class: "card" },
+    cardHead(
+      "activity",
+      "实时追踪用户",
+      rows.length ? `${rows.length} 位成员正在追踪` : "等待成员发言",
+      iconButton("refresh-cw", "刷新", () => refreshCurrent(true), {
+        className: "icon-btn",
+        size: 14,
+      }),
+    ),
+    el(
+      "div",
+      { class: "card-body" },
+      enabled
+        ? table
+        : el(
+            "div",
+            { class: "banner is-info" },
+            icon("info", 15),
+            el("span", {}, "刷屏监控当前未启用，开启后才会记录消息频率。"),
+          ),
+    ),
+  );
+
+  target.replaceChildren(
+    ...[
+      perGroup
+        ? el(
+            "div",
+            { class: "banner is-info" },
+            icon("info", 15),
+            el("span", {}, "当前使用分群配置：各群可以单独设置刷屏监控开关与阈值。"),
+          )
+        : null,
+      el("div", { class: "stack spam-stack" }, cards, limitCard, trackCard),
+    ].filter(Boolean),
+  );
+}
+
 function renderSettings() {
   const data = state.config;
   const page = document.getElementById("page");
@@ -2651,7 +3393,10 @@ function renderSettings() {
 }
 
 function settingsSection(section) {
-  const fields = (section.fields || []).map((field) => settingsField(field));
+  const hidden = new Set(RECALL_CONFIG_KEYS);
+  const fields = (section.fields || [])
+    .filter((field) => !hidden.has(field.key))
+    .map((field) => settingsField(field));
   const details = el(
     "details",
     { class: "card settings-section", open: true, dataset: { section: section.key } },

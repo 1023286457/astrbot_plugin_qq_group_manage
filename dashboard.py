@@ -13,6 +13,7 @@ import hashlib
 import hmac
 import json
 import re
+import time
 from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any
@@ -52,7 +53,7 @@ except Exception as exc:  # pragma: no cover - 仅在旧的 AstrBot 上触发
 
 PLUGIN_NAME = "astrbot_plugin_qq_group_manage"
 PLUGIN_DISPLAY_NAME = "QQ官机群管"
-PLUGIN_VERSION = "2.9.6"
+PLUGIN_VERSION = "2.9.7"
 QQ_PLATFORMS = {"qq_official", "qq_official_webhook"}
 VIEW_NAME = "console"
 SECTION_ORDER = (
@@ -65,6 +66,7 @@ SECTION_ORDER = (
     "limit_settings",
     "keyword_settings",
     "verify_settings",
+    "spam_settings",
 )
 SECTION_ICONS = {
     "scope_settings": "globe",
@@ -76,6 +78,7 @@ SECTION_ICONS = {
     "limit_settings": "gauge",
     "keyword_settings": "filter",
     "verify_settings": "badge-check",
+    "spam_settings": "activity",
 }
 SECTION_FOR_KEY: dict[str, str] = {}
 for _section in SECTION_ORDER:
@@ -87,6 +90,7 @@ DURATION_KEYS = {
     "default_mute_duration",
     "keyword_mute_duration",
     "verify_fail_mute_duration",
+    "spam_mute_duration",
 }
 INT_RANGES = {
     "join_request_page_size": (1, 100),
@@ -95,7 +99,35 @@ INT_RANGES = {
     "arithmetic_max_number": (2, 1000),
     "verify_max_failures": (1, 20),
     "verify_timeout_minutes": (0, 1440),
+    "spam_limit_1s": (0, 1000),
+    "spam_limit_1m": (0, 100000),
+    "spam_limit_1h": (0, 1000000),
+    "spam_night_limit": (0, 100000),
+    "spam_recall_threshold": (0, 100),
 }
+INT_UNITS = {
+    "spam_limit_1s": "条/秒",
+    "spam_limit_1m": "条/分",
+    "spam_limit_1h": "条/小时",
+    "spam_night_limit": "条/分",
+    "spam_recall_threshold": "条",
+}
+SPAM_KEYS = (
+    "enable_anti_spam",
+    "spam_limit_1s",
+    "spam_limit_1m",
+    "spam_limit_1h",
+    "spam_night_enabled",
+    "spam_night_limit",
+    "spam_mute_duration",
+    "spam_recall_threshold",
+)
+RECALL_KEYS = (
+    "enable_link_recall",
+    "link_recall_notice",
+    "enable_qr_recall",
+    "qr_recall_notice",
+)
 LIST_CHOICES = {
     "arithmetic_ops": ["加", "减", "乘", "除"],
 }
@@ -213,6 +245,8 @@ class DashboardAPI:
             ("groups/detail", self.get_group_detail, ["GET"], "群组详情"),
             ("groups/admins", self.update_group_admins, ["POST"], "维护群管名单"),
             ("groups/note", self.update_group_note, ["POST"], "保存群备注"),
+            ("spam", self.get_spam, ["GET"], "刷屏监控状态"),
+            ("recall", self.get_recall, ["GET"], "风险消息撤回状态"),
             ("broadcast/send", self.send_broadcast, ["POST"], "群广播"),
             ("panel/images", self.get_panel_images, ["GET"], "群管面板图片"),
             ("panel/images/save", self.save_panel_image, ["POST"], "保存群管面板图片"),
@@ -762,6 +796,8 @@ class DashboardAPI:
         if kind == "int":
             low, high = INT_RANGES.get(key, (0, 2_147_483_647))
             field.update({"min": low, "max": high, "step": 1})
+            if key in INT_UNITS:
+                field["unit"] = INT_UNITS[key]
         elif kind == "string":
             options = meta.get("options")
             if isinstance(options, list) and options:
@@ -1163,6 +1199,135 @@ class DashboardAPI:
                 duplicates.add(umo)
             seen.add(umo)
         return len(duplicates)
+
+    # ------------------------------------------------------------------
+    # Handler: 刷屏监控
+    # ------------------------------------------------------------------
+    async def get_spam(self) -> Any:
+        try:
+            per_group = bool(
+                self._global_value("enable_per_group_feature_settings", False)
+            )
+            enabled = bool(self._global_value("enable_anti_spam", False))
+            enabled_groups = 0
+            if per_group:
+                try:
+                    profiles = GroupConfig(self.plugin.config).data.get("groups", [])
+                except Exception:
+                    profiles = []
+                for profile in profiles:
+                    if not isinstance(profile, dict) or not profile.get(
+                        "confirmed", True
+                    ):
+                        continue
+                    section = profile.get("spam_settings")
+                    value = None
+                    if isinstance(section, dict):
+                        value = section.get("enable_anti_spam")
+                    if value is None:
+                        value = enabled
+                    if bool(value):
+                        enabled_groups += 1
+            monitor = getattr(self.plugin, "spam_monitor", None)
+            if monitor is not None:
+                snapshot = monitor.snapshot(time.monotonic())
+            else:
+                snapshot = {
+                    "tracked_groups": 0,
+                    "tracked_users": 0,
+                    "active_users": 0,
+                    "rows": [],
+                }
+            limits = {
+                key: _json_safe(self._global_value(key)) for key in SPAM_KEYS
+            }
+            return json_response(
+                {
+                    "enabled": enabled or enabled_groups > 0,
+                    "per_group": per_group,
+                    "enabled_groups": enabled_groups,
+                    "limits": limits,
+                    "stats": {
+                        "enabled": enabled or enabled_groups > 0,
+                        "tracked_groups": snapshot["tracked_groups"],
+                        "tracked_users": snapshot["tracked_users"],
+                        "active_users": snapshot["active_users"],
+                    },
+                    "rows": snapshot["rows"],
+                    "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                }
+            )
+        except Exception as exc:
+            return self._error(exc, "读取刷屏监控失败")
+
+    # ------------------------------------------------------------------
+    # Handler: 风险消息撤回
+    # ------------------------------------------------------------------
+    async def get_recall(self) -> Any:
+        try:
+            per_group = bool(
+                self._global_value("enable_per_group_feature_settings", False)
+            )
+            umo = str(request.query.get("umo") or "").strip()
+            if umo and not valid_group_umo(umo):
+                raise DashboardError("群 UMO 格式不正确")
+            scope = "group" if per_group and umo else "global"
+            if scope == "group":
+                config = {
+                    key: _json_safe(self._group_value(key, umo, self._global_value(key)))
+                    for key in RECALL_KEYS
+                }
+            else:
+                config = {
+                    key: _json_safe(self._global_value(key)) for key in RECALL_KEYS
+                }
+            monitor = getattr(self.plugin, "recall_monitor", None)
+            if monitor is not None:
+                snapshot = monitor.snapshot(time.monotonic())
+            else:
+                snapshot = {
+                    "tracked_groups": 0,
+                    "total": 0,
+                    "link_count": 0,
+                    "qr_count": 0,
+                    "rows": [],
+                }
+            groups: list[dict[str, str]] = []
+            if per_group:
+                try:
+                    for item in self._known_groups().values():
+                        summary = self._group_summary(item)
+                        label = summary["label"]
+                        note = summary.get("note") or ""
+                        groups.append(
+                            {
+                                "umo": summary["umo"],
+                                "label": f"{note} · {label}" if note else label,
+                            }
+                        )
+                except Exception:
+                    groups = []
+            return json_response(
+                {
+                    "enabled": bool(config.get("enable_link_recall"))
+                    or bool(config.get("enable_qr_recall")),
+                    "per_group": per_group,
+                    "scope": scope,
+                    "umo": umo if scope == "group" else "",
+                    "config": config,
+                    "stats": {
+                        "total": snapshot["total"],
+                        "link_count": snapshot["link_count"],
+                        "qr_count": snapshot["qr_count"],
+                        "tracked_groups": snapshot["tracked_groups"],
+                    },
+                    "rows": snapshot["rows"],
+                    "groups": groups,
+                    "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                }
+            )
+        except Exception as exc:
+            return self._error(exc, "读取风险消息撤回失败")
 
     # ------------------------------------------------------------------
     # Handler: 入群申请

@@ -2938,3 +2938,161 @@ a:hover {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ------------------------------------------------------------------ */
+/* 刷屏监控                                                           */
+/* ------------------------------------------------------------------ */
+
+.spam-limit-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+}
+
+.spam-limit-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.spam-limit-label {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.spam-limit-value {
+  font-size: 15px;
+  font-weight: 650;
+  color: var(--text);
+}
+
+.spam-limit-hint {
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+.spam-table-wrap {
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.spam-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.spam-table th {
+  padding: 10px 12px;
+  text-align: left;
+  white-space: nowrap;
+  font-weight: 600;
+  color: var(--muted);
+  background: var(--surface-2);
+}
+
+.spam-table td {
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+  color: var(--text-2);
+}
+
+.spam-mono {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.spam-status {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.spam-status.is-normal {
+  color: var(--success);
+  background: var(--success-soft);
+}
+
+.spam-status.is-tracking {
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.spam-status.is-muted {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.spam-stack {
+  margin-top: 18px;
+}
+
+.spam-stack .stat-grid {
+  margin-top: 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* 监控：二级导航与风险消息撤回                                       */
+/* ------------------------------------------------------------------ */
+
+.monitor-subnav {
+  width: fit-content;
+  margin-bottom: 16px;
+}
+
+.monitor-content {
+  min-width: 0;
+}
+
+.spam-status.is-info {
+  color: var(--info);
+  background: var(--info-soft);
+}
+
+.recall-qr {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.recall-qr-thumb {
+  width: 44px;
+  height: 44px;
+  object-fit: cover;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.recall-link {
+  color: var(--info);
+  text-decoration: none;
+  word-break: break-all;
+}
+
+.recall-link:hover {
+  text-decoration: underline;
+}
+
+.recall-text {
+  color: var(--text-2);
+  word-break: break-all;
+}
+
+.recall-content {
+  max-width: 360px;
+}
+
+.monitor-content .field-list {
+  display: grid;
+  gap: 14px;
+}
+

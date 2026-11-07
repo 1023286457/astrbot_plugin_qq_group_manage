@@ -1,2 +1,3 @@
 regex>=2024.11.6
 aiohttp
+zxing-cpp>=2.2.0
