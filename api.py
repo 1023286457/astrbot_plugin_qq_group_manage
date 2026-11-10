@@ -15,6 +15,9 @@ class QQBotRoute(Route):
     SANDBOX_DOMAIN = "sandbox.api.bot.qq.com"
 
 
+QQ_PLATFORMS = {"qq_official", "qq_official_webhook"}
+
+
 class QQGroupManageAPI:
     def __init__(self, client: Any) -> None:
         self.client = client

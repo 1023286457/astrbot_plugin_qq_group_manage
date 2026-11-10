@@ -8,17 +8,18 @@ import time
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
 from astrbot.api import AstrBotConfig, logger
-from astrbot.api.event import AstrMessageEvent, filter
+from astrbot.api.event import AstrMessageEvent, MessageEventResult, filter
 from astrbot.api.message_components import At, Image, Plain, Reply
 from astrbot.api.star import Context, Star, StarTools, register
 from astrbot.core.star.session_plugin_manager import SessionPluginManager
 from astrbot.core.star.session_llm_manager import SessionServiceManager
 
-from .api import QQGroupManageAPI
+from .api import QQ_PLATFORMS, QQGroupManageAPI
 from .callback_guard import ReviewCallbackGuard
 from .dashboard import DashboardAPI
 from .durations import parse_duration
@@ -49,7 +50,36 @@ from .verify_flow import JoinVerifier
 PLUGIN_NAME = "astrbot_plugin_qq_group_manage"
 # 改名前的名称，仅用于兼容旧的 plugin_set 白名单配置。
 LEGACY_PLUGIN_NAMES = ("astrbot_plugin_qq_group_admin",)
-QQ_PLATFORMS = {"qq_official", "qq_official_webhook"}
+
+try:  # 跨平台按钮组件：AstrBot >= 4.29.4（钉钉互动卡片等）
+    from astrbot.api.message_components import ActionRow, Button
+
+    _PORTABLE_BUTTONS = True
+except ImportError:  # 旧版 AstrBot 没有通用按钮组件，相关功能自动降级
+    ActionRow = None
+    Button = None
+    _PORTABLE_BUTTONS = False
+
+try:
+    _register_button_action = filter.button_action
+except AttributeError:
+    _register_button_action = None
+
+
+def _optional_button_action():
+    """AstrBot >= 4.29.4 注册跨平台按钮处理；旧版本退化为空装饰器。"""
+    if _register_button_action is not None:
+        return _register_button_action()
+
+    def decorator(func):
+        return func
+
+    return decorator
+
+
+DINGTALK_PLATFORM = "dingtalk"
+# 钉钉卡片回调的 spaceId 可能是完整 openSpaceId，统一剥掉前缀对齐群会话 ID。
+DINGTALK_CARD_GROUP_PREFIX = "dtv1.card//IM_GROUP."
 GROUP_MEMBER_INTENT = 1 << 24
 GROUP_AND_C2C_INTENT = 1 << 25
 INTERACTION_INTENT = 1 << 26
@@ -525,7 +555,7 @@ def review_quote(event: AstrMessageEvent) -> set[str] | None:
     PLUGIN_NAME,
     "简单么么熊",
     "QQ 官方机器人群管理：禁言、入群申请审批、分群管理员与 LLM 工具",
-    "2.9.9",
+    "3.0.0",
 )
 class QQGroupAdminPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig) -> None:
@@ -1222,6 +1252,17 @@ class QQGroupAdminPlugin(Star):
             await acknowledge(0)
             await self._send_manage_panel(platform_id, api, group, event_id)
             return True
+        if action == "group_help":
+            await acknowledge(0)
+            await self._send_group_help(platform_id, api, group, event_id)
+            return True
+        if action == "status":
+            await acknowledge(0)
+            if not await self._send_server_status_image(api, group):
+                await self._send_panel_text(
+                    api, group, "服务器状态图片生成失败，请稍后重试。", event_id
+                )
+            return True
         if action in PANEL_IMAGE_KEYS:
             await acknowledge(0)
             await self._send_panel_image(api, group, action, event_id)
@@ -1308,6 +1349,126 @@ class QQGroupAdminPlugin(Star):
         except Exception:
             logger.exception("[%s] 发送群管面板图片失败", PLUGIN_NAME)
             await self._send_panel_text(api, group, "图片发送失败，请稍后重试。", event_id)
+
+    async def _send_group_help(
+        self,
+        platform_id: str,
+        api: QQGroupManageAPI,
+        group: str,
+        event_id: str,
+    ) -> None:
+        text = self._group_admin_help_text(platform_id, group)
+        if not text:
+            await self._send_panel_text(api, group, "群管帮助指令已关闭。", event_id)
+            return
+        try:
+            path = await self.text_to_image(
+                text,
+                return_url=False,
+                umo=self._group_umo(platform_id, group),
+            )
+            raw = Path(str(path).removeprefix("file://")).read_bytes()
+            uploaded = await asyncio.wait_for(
+                api.upload_group_image(
+                    group,
+                    "group-help.png",
+                    base64.b64encode(raw).decode("ascii"),
+                ),
+                20,
+            )
+            file_info = (
+                str(uploaded.get("file_info") or "")
+                if isinstance(uploaded, dict)
+                else ""
+            )
+            if not file_info:
+                raise RuntimeError("上传接口没有返回 file_info")
+            await asyncio.wait_for(api.send_group_media(group, file_info), 15)
+        except Exception:
+            logger.warning(
+                "[%s] 群管帮助图片生成/发送失败，降级为文字",
+                PLUGIN_NAME,
+                exc_info=True,
+            )
+            await self._send_panel_text(api, group, text, event_id)
+
+    async def _send_server_status_image(
+        self, api: QQGroupManageAPI, group: str
+    ) -> bool:
+        try:
+            raw = await asyncio.to_thread(self.server_status.render_card)
+            if not raw:
+                return False
+            uploaded = await asyncio.wait_for(
+                api.upload_group_image(
+                    group,
+                    "server-status.png",
+                    base64.b64encode(raw).decode("ascii"),
+                ),
+                20,
+            )
+            file_info = (
+                str(uploaded.get("file_info") or "")
+                if isinstance(uploaded, dict)
+                else ""
+            )
+            if not file_info:
+                raise RuntimeError("上传接口没有返回 file_info")
+            await asyncio.wait_for(api.send_group_media(group, file_info), 15)
+            return True
+        except Exception:
+            logger.exception("[%s] 发送服务器状态图片失败", PLUGIN_NAME)
+            return False
+
+    def _write_status_image(self, raw: bytes) -> Path | None:
+        """把渲染好的状态 PNG 写入插件数据目录，供通用消息链发送。"""
+        try:
+            cache = self.server_status.data_dir / "cache"
+            cache.mkdir(parents=True, exist_ok=True)
+            path = cache / "server-status.png"
+            path.write_bytes(raw)
+            return path
+        except Exception:
+            logger.exception("[%s] 保存服务器状态图片失败", PLUGIN_NAME)
+            return None
+
+    async def _status_text_message(self, is_qq: bool) -> str:
+        """生成服务器状态的文字摘要；QQ 平台额外展示 QQ 专属信息。"""
+        try:
+            data = await asyncio.to_thread(self.server_status.overview)
+            if not data.get("ok"):
+                return str(data.get("error") or "服务器状态采集失败")
+            memory = data.get("memory") or {}
+            disk = data.get("disk") or {}
+            network = data.get("network") or {}
+            lines = [
+                "服务器运行状态",
+                f"CPU：{float(data.get('cpu') or 0):.1f}%",
+                f"内存：{float(memory.get('percent') or 0):.1f}%"
+                f"（{memory.get('text') or '--'}）",
+                f"磁盘：{float(disk.get('percent') or 0):.1f}%"
+                f"（{disk.get('text') or '--'}）",
+                f"网络：↓ {network.get('down_text') or '--'} / ↑ {network.get('up_text') or '--'}",
+            ]
+            if is_qq:
+                lines.append(
+                    "官方平台："
+                    f"{'在线' if data.get('bot', {}).get('online') else '离线'}"
+                )
+                lines.append(f"已知群聊：{data.get('known_groups', 0)}")
+            lines.append(f"采样间隔：{data.get('sample_seconds', '--')} 秒")
+            return "\n".join(lines)
+        except Exception as exc:
+            return f"读取服务器状态失败：{exc}"
+
+    def _group_admin_help_text(self, platform_id: str, group: str) -> str:
+        umo = self._group_umo(platform_id, group)
+        if not bool(self._group_setting("enable_group_admin_commands", umo, True)):
+            return ""
+        default_duration = str(
+            self._group_setting("default_mute_duration", umo, "1分") or "1分"
+        )
+        return format_group_admin_help(default_duration)
 
     async def _send_manage_panel(
         self, platform_id: str, api: QQGroupManageAPI, group: str, event_id: str = ""
@@ -1493,11 +1654,16 @@ class QQGroupAdminPlugin(Star):
     async def remember_group_activity(self, event: AstrMessageEvent) -> None:
         """Remember group_openid for the WebUI group list; never stores content."""
         if not self._is_qq_group(event):
-            return
+            # 钉钉群消息也记录，便于在 WebUI 维护分群配置与插件群管名单。
+            if (
+                event.get_platform_name() != DINGTALK_PLATFORM
+                or not event.get_group_id()
+            ):
+                return
         try:
             self.storage.remember_group(
                 event.get_platform_id(),
-                event.get_group_id(),
+                self._portable_group_id(event.get_group_id()),
             )
         except Exception:
             logger.exception("[%s] 记录群组活跃信息失败", PLUGIN_NAME)
@@ -2056,24 +2222,19 @@ class QQGroupAdminPlugin(Star):
         if not self._is_qq_group(event):
             yield event.plain_result("该指令仅支持已启用的 QQ 官方机器人群聊。")
             return
-        if not self._event_feature_setting(event, "enable_group_admin_commands"):
-            return
-        default_duration = str(
-            self._event_setting(event, "default_mute_duration", "1分") or "1分"
+        text = self._group_admin_help_text(
+            event.get_platform_id(), event.get_group_id()
         )
-        yield event.plain_result(
-            format_group_admin_help(default_duration)
-        ).use_markdown(True)
+        if not text:
+            return
+        yield event.plain_result(text).use_markdown(True)
 
     @filter.command("查看状态", alias={"状态"})
     async def server_status_command(self, event: AstrMessageEvent) -> None:
         """发送服务器运行状态图片，失败时降级为文字摘要。"""
-        if not self._is_qq_group(event):
+        is_qq = event.get_platform_name() in QQ_PLATFORMS
+        if is_qq and not self._is_qq_group(event):
             yield event.plain_result("该指令仅支持 QQ 官方机器人群聊。")
-            event.stop_event()
-            return
-        if not self._can_manage(event):
-            yield event.plain_result("你没有本群群管权限，无法查看服务器状态。")
             event.stop_event()
             return
         service = self.server_status
@@ -2085,77 +2246,257 @@ class QQGroupAdminPlugin(Star):
         try:
             raw = await asyncio.to_thread(service.render_card)
             if raw:
-                platform = self._platform(event)
-                api = QQGroupManageAPI(platform.client)
-                group = event.get_group_id()
-                uploaded = await asyncio.wait_for(
-                    api.upload_group_image(
-                        group,
-                        "server-status.png",
-                        base64.b64encode(raw).decode("ascii"),
-                    ),
-                    20,
-                )
-                file_info = (
-                    str(uploaded.get("file_info") or "")
-                    if isinstance(uploaded, dict)
-                    else ""
-                )
-                if not file_info:
-                    raise RuntimeError("上传接口没有返回 file_info")
-                await asyncio.wait_for(api.send_group_media(group, file_info), 15)
-                event.stop_event()
-                return
+                if is_qq:
+                    platform = self._platform(event)
+                    api = QQGroupManageAPI(platform.client)
+                    group = event.get_group_id()
+                    uploaded = await asyncio.wait_for(
+                        api.upload_group_image(
+                            group,
+                            "server-status.png",
+                            base64.b64encode(raw).decode("ascii"),
+                        ),
+                        20,
+                    )
+                    file_info = (
+                        str(uploaded.get("file_info") or "")
+                        if isinstance(uploaded, dict)
+                        else ""
+                    )
+                    if not file_info:
+                        raise RuntimeError("上传接口没有返回 file_info")
+                    await asyncio.wait_for(api.send_group_media(group, file_info), 15)
+                    event.stop_event()
+                    return
+                image_path = self._write_status_image(raw)
+                if image_path is not None:
+                    try:
+                        sent = await self.context.send_message(
+                            event.unified_msg_origin,
+                            event.image_result(str(image_path)),
+                        )
+                    except Exception:
+                        logger.exception(
+                            "[%s] 发送服务器状态图片失败，降级为文字", PLUGIN_NAME
+                        )
+                    else:
+                        if sent:
+                            event.stop_event()
+                            return
+                        logger.warning(
+                            "[%s] 当前会话没有匹配的平台实例，降级为文字", PLUGIN_NAME
+                        )
         except Exception:
             logger.exception("[%s] 发送服务器状态图片失败，降级为文字", PLUGIN_NAME)
-        try:
-            data = await asyncio.to_thread(service.overview)
-            if not data.get("ok"):
-                message = str(data.get("error") or "服务器状态采集失败")
-            else:
-                memory = data.get("memory") or {}
-                disk = data.get("disk") or {}
-                network = data.get("network") or {}
-                message = (
-                    "服务器运行状态\n"
-                    f"CPU：{float(data.get('cpu') or 0):.1f}%\n"
-                    f"内存：{float(memory.get('percent') or 0):.1f}%"
-                    f"（{memory.get('text') or '--'}）\n"
-                    f"磁盘：{float(disk.get('percent') or 0):.1f}%"
-                    f"（{disk.get('text') or '--'}）\n"
-                    f"网络：↓ {network.get('down_text') or '--'} / ↑ {network.get('up_text') or '--'}\n"
-                    f"官方平台：{'在线' if data.get('bot', {}).get('online') else '离线'}\n"
-                    f"已知群聊：{data.get('known_groups', 0)}\n"
-                    f"采样间隔：{data.get('sample_seconds', '--')} 秒"
-                )
-        except Exception as exc:
-            message = f"读取服务器状态失败：{exc}"
+        message = await self._status_text_message(is_qq)
         yield event.plain_result(message)
         event.stop_event()
 
     @filter.command("菜单", alias={"菜单指令", "群管面板"})
     async def group_panel_command(self, event: AstrMessageEvent) -> None:
-        if not self._is_qq_group(event):
-            yield event.plain_result("该指令仅支持 QQ 官方机器人群聊。")
+        platform_name = event.get_platform_name()
+        if platform_name in QQ_PLATFORMS:
+            if not self._is_qq_group(event):
+                yield event.plain_result("该指令仅支持 QQ 官方机器人群聊。")
+                event.stop_event()
+                return
+            platform = self._platform(event)
+            if platform is None or getattr(platform, "client", None) is None:
+                yield event.plain_result("当前 QQ 平台不在线，无法打开菜单。")
+                event.stop_event()
+                return
+            try:
+                await QQGroupManageAPI(platform.client).send_group_markdown(
+                    event.get_group_id(),
+                    "## 淼淼菜单\n请点击下方按钮选择功能~",
+                    keyboard=main_keyboard(),
+                )
+            except Exception:
+                logger.exception("[%s] 发送淼淼菜单失败", PLUGIN_NAME)
+                yield event.plain_result("淼淼菜单发送失败，请稍后重试。")
+                event.stop_event()
+                return
             event.stop_event()
             return
-        platform = self._platform(event)
-        if platform is None or getattr(platform, "client", None) is None:
-            yield event.plain_result("当前 QQ 平台不在线，无法打开菜单。")
-            event.stop_event()
+        if self._portable_buttons_ok(event):
+            rows = self._portable_menu_rows(event.unified_msg_origin)
+            if rows:
+                try:
+                    chain = event.chain_result(
+                        [Plain("## 淼淼菜单\n请点击下方按钮选择功能~"), *rows]
+                    )
+                except Exception:
+                    logger.exception("[%s] 构建淼淼菜单失败", PLUGIN_NAME)
+                    chain = None
+                if chain is not None:
+                    yield chain
+                    event.stop_event()
+                    return
+        yield event.plain_result(self._portable_text_menu())
+        event.stop_event()
+
+    # ------------------------------------------------------------------
+    # 跨平台按钮（AstrBot >= 4.29.4，当前适配钉钉互动卡片）
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _portable_buttons_ok(event: AstrMessageEvent) -> bool:
+        """当前会话能否使用跨平台按钮（已验证钉钉互动卡片适配）。"""
+        return _PORTABLE_BUTTONS and event.get_platform_name() == DINGTALK_PLATFORM
+
+    @staticmethod
+    def _portable_group_id(group_id: Any) -> str:
+        """剥掉钉钉卡片回调 spaceId 可能携带的 openSpaceId 前缀。"""
+        group = str(group_id or "")
+        if group.startswith(DINGTALK_CARD_GROUP_PREFIX):
+            return group[len(DINGTALK_CARD_GROUP_PREFIX) :]
+        return group
+
+    @staticmethod
+    def _portable_text_menu() -> str:
+        return (
+            "淼淼菜单（当前平台暂不支持按钮菜单）\n"
+            "· 查看状态 / 状态：查看服务器运行状态"
+        )
+
+    @staticmethod
+    def _portable_menu_rows(umo: str) -> list[Any]:
+        """菜单按钮；data 携带发送时会话，点击时据此回复到正确的群/私聊。"""
+        menu = (
+            ("功能列表", "features", Button.Style.DEFAULT),
+            ("使用指南", "guide", Button.Style.DEFAULT),
+            ("群管面板", "manage", Button.Style.PRIMARY),
+            ("群管帮助", "group_help", Button.Style.DEFAULT),
+            ("运行状态", "status", Button.Style.DEFAULT),
+            ("获取帮助", "help", Button.Style.DEFAULT),
+        )
+        rows: list[Any] = []
+        for index in range(0, len(menu), 2):
+            buttons = [
+                Button(
+                    id=f"qqga-{token}",
+                    label=label,
+                    action=Button.CallbackAction(data={"act": token, "umo": umo}),
+                    style=style,
+                )
+                for label, token, style in menu[index : index + 2]
+            ]
+            rows.append(ActionRow(buttons=buttons))
+        return rows
+
+    @_optional_button_action()
+    async def portable_button_action(self, event: AstrMessageEvent) -> None:
+        """处理 qqga-* 跨平台按钮点击；QQ 官方按钮仍走原生键盘回调。"""
+        interaction = event.get_button_interaction()
+        if interaction is None:
             return
+        if event.get_platform_name() in QQ_PLATFORMS:
+            return
+        action_id = str(getattr(interaction, "action_id", "") or "")
+        if not action_id.startswith("qqga-"):
+            return
+        data = getattr(interaction, "data", None)
+        data = data if isinstance(data, dict) else {}
+        act = str(data.get("act") or "").strip() or action_id.removeprefix("qqga-")
+
+        # 回复目标优先取按钮 data 携带的会话：钉钉卡片回调报文缺少可靠的
+        # spaceType/spaceId（SDK 也不解析这两个字段），适配器可能把群聊点击
+        # 误判为私聊，跟随事件会话回复会错误地发到点击者私聊。
+        umo = str(data.get("umo") or "").strip() or event.unified_msg_origin
+        logger.info("[%s] 跨平台按钮 %s 回复目标：%s", PLUGIN_NAME, act, umo)
         try:
-            await QQGroupManageAPI(platform.client).send_group_markdown(
-                event.get_group_id(),
-                "## 淼淼菜单\n请点击下方按钮选择功能。",
-                keyboard=main_keyboard(),
+            await self._handle_portable_action(act, umo)
+        except Exception:
+            logger.exception("[%s] 处理跨平台按钮点击失败", PLUGIN_NAME)
+        event.stop_event()
+
+    async def _handle_portable_action(self, act: str, umo: str) -> None:
+        if act in PANEL_IMAGE_KEYS:
+            image = load_image(self.storage, act)
+            if image is None:
+                await self._portable_send_text(
+                    umo,
+                    f"还没有上传「{PANEL_IMAGE_KEYS.get(act, act)}」图片，"
+                    "请先到 WebUI → 数据页上传。",
+                )
+                return
+            raw, _mime, _name = image
+            await self._portable_send_image(
+                umo, base64.b64encode(raw).decode("ascii")
+            )
+            return
+        if act == "group_help":
+            text = self._portable_group_help_text(umo)
+            if not text:
+                await self._portable_send_text(umo, "群管帮助指令已关闭。")
+                return
+            try:
+                path = await self.text_to_image(text, return_url=False, umo=umo)
+                raw = Path(str(path).removeprefix("file://")).read_bytes()
+                if await self._portable_send_image(
+                    umo, base64.b64encode(raw).decode("ascii")
+                ):
+                    return
+            except Exception:
+                logger.warning(
+                    "[%s] 跨平台群管帮助图片生成/发送失败，降级为文字",
+                    PLUGIN_NAME,
+                    exc_info=True,
+                )
+            await self._portable_send_text(umo, text)
+            return
+        if act == "status":
+            raw = await asyncio.to_thread(self.server_status.render_card)
+            if raw and await self._portable_send_image(
+                umo, base64.b64encode(raw).decode("ascii")
+            ):
+                return
+            await self._portable_send_text(
+                umo, await self._status_text_message(is_qq=False)
+            )
+            return
+        if act == "manage" or act in {
+            "audit_on",
+            "audit_off",
+            "verify_on",
+            "verify_off",
+        }:
+            # 群管面板和开关只在 QQ 官方群有实际作用，其他平台直接提示不支持。
+            await self._portable_send_text(umo, "此平台不支持群管面板。")
+            return
+        await self._portable_send_text(umo, "按钮已失效，请重新发送 菜单 打开面板。")
+
+    def _portable_group_help_text(self, umo: str) -> str:
+        if not bool(self._group_setting("enable_group_admin_commands", umo, True)):
+            return ""
+        default_duration = str(
+            self._group_setting("default_mute_duration", umo, "1分") or "1分"
+        )
+        return format_group_admin_help(default_duration)
+
+    async def _portable_send_chain(self, umo: str, chain: Any) -> bool:
+        try:
+            sent = await self.context.send_message(umo, chain)
+        except Exception:
+            logger.exception("[%s] 跨平台按钮回复发送失败", PLUGIN_NAME)
+            return False
+        if not sent:
+            logger.warning(
+                "[%s] 跨平台按钮回复未找到平台会话：%s", PLUGIN_NAME, umo
+            )
+        return bool(sent)
+
+    async def _portable_send_text(self, umo: str, text: str) -> bool:
+        return await self._portable_send_chain(umo, MessageEventResult(chain=[Plain(text)]))
+
+    async def _portable_send_image(self, umo: str, image_base64: str) -> bool:
+        try:
+            chain = MessageEventResult(
+                chain=[Image.fromBase64(image_base64)]
             )
         except Exception:
-            logger.exception("[%s] 发送淼淼菜单失败", PLUGIN_NAME)
-            yield event.plain_result("淼淼菜单发送失败，请稍后重试。")
-            event.stop_event()
-            return
-        event.stop_event()
+            logger.exception("[%s] 构建跨平台图片消息失败", PLUGIN_NAME)
+            return False
+        return await self._portable_send_chain(umo, chain)
 
     @filter.command("群管功能")
     async def group_feature_settings(

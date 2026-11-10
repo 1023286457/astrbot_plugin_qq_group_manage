@@ -15,7 +15,7 @@ PANEL_IMAGE_KEYS = {
     "help": "获取帮助",
 }
 PANEL_BUTTON_RE = re.compile(
-    r"^qqpanel:(features|guide|help|manage|audit|verify|noop)(?::(on|off))?$"
+    r"^qqpanel:(features|guide|help|manage|group_help|status|audit|verify|noop)(?::(on|off))?$"
 )
 PANEL_IMAGE_MAX_BYTES = 5 * 1024 * 1024
 _MIME_SUFFIX = {"image/png": ".png", "image/jpeg": ".jpg", "image/jpg": ".jpg"}
@@ -58,12 +58,18 @@ def main_keyboard() -> dict[str, Any]:
                 {
                     "buttons": [
                         _button("功能列表", "qqpanel:features"),
-                        _button("群管面板", "qqpanel:manage", admin_only=True),
+                        _button("使用指南", "qqpanel:guide"),
                     ]
                 },
                 {
                     "buttons": [
-                        _button("使用指南", "qqpanel:guide"),
+                        _button("群管面板", "qqpanel:manage", admin_only=True),
+                        _button("群管帮助", "qqpanel:group_help"),
+                    ]
+                },
+                {
+                    "buttons": [
+                        _button("运行状态", "qqpanel:status"),
                         _button("获取帮助", "qqpanel:help"),
                     ]
                 },

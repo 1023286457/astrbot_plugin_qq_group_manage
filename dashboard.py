@@ -20,7 +20,7 @@ from typing import Any
 
 from astrbot.api import logger
 
-from .api import QQGroupManageAPI
+from .api import QQ_PLATFORMS, QQGroupManageAPI
 from .durations import parse_duration
 from .group_config import GROUP_SECTIONS, SCHEMA, GroupConfig, valid_group_umo
 from .join_verify import parse_custom_questions
@@ -53,7 +53,7 @@ except Exception as exc:  # pragma: no cover - 仅在旧的 AstrBot 上触发
 
 PLUGIN_NAME = "astrbot_plugin_qq_group_manage"
 PLUGIN_DISPLAY_NAME = "QQ官机群管"
-PLUGIN_VERSION = "2.9.9"
+PLUGIN_VERSION = "3.0.0"
 QQ_PLATFORMS = {"qq_official", "qq_official_webhook"}
 VIEW_NAME = "console"
 SECTION_ORDER = (
@@ -1801,6 +1801,16 @@ class DashboardAPI:
                     platform_id = str(item.get("platform_id") or "")
                     group_openid = str(item.get("group_openid") or "")
                     if not platform_id or not group_openid:
+                        continue
+                    # 群广播走 QQ 官方接口；钉钉等平台群仅用于控制台管理，不参与广播。
+                    platform = self._platform(platform_id)
+                    if platform is None:
+                        continue
+                    try:
+                        platform_name = str(platform.meta().name)
+                    except Exception:
+                        platform_name = ""
+                    if platform_name and platform_name not in QQ_PLATFORMS:
                         continue
                     targets.append((umo, platform_id, group_openid))
                 if not targets:

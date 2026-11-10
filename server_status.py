@@ -669,7 +669,7 @@ class ServerStatusService:
 
         glass_panel((38, 32, width - 38, 118), 18)
         draw.text((62, 49), "服务器运行状态", font=font(30, True), fill=white)
-        draw.text((64, 88), "QQ 官方平台 · 宿主机实时状态", font=font(15), fill=muted)
+        draw.text((64, 88), "QQ 官方平台 · Bot服务器实时状态", font=font(15), fill=muted)
         online = bool(data.get("bot", {}).get("online"))
         draw.ellipse((width - 176, 62, width - 162, 76), fill=green if online else (239, 107, 115))
         draw.text((width - 152, 58), "官方平台在线" if online else "官方平台离线", font=font(14), fill=white)
