@@ -1438,6 +1438,16 @@ a:hover {
   width: 100%;
   margin-top: 8px;
 }
+.group-name-all {
+  margin-left: auto;
+  padding: 6px 9px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.group-list-card .card-head {
+  flex-wrap: wrap;
+  gap: 6px;
+}
 
 .group-list {
   display: grid;

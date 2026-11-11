@@ -8,7 +8,7 @@ const modalRoot = document.getElementById("modal-root");
 const toastRoot = document.getElementById("toast-root");
 
 const PLUGIN_NAME = "astrbot_plugin_qq_group_manage";
-const PLUGIN_VERSION = "3.0.0";
+const PLUGIN_VERSION = "3.1.0";
 const TAB_IDS = ["overview", "pending", "verify", "groups", "spam", "settings", "broadcast", "data"];
 
 const TABS = [
@@ -1381,7 +1381,7 @@ function renderOverview() {
                 el(
                   "span",
                   { class: "mini-copy" },
-                  el("p", { class: "mini-title" }, group.group_uid ? `群 ${group.group_uid}` : group.note || group.label),
+                  el("p", { class: "mini-title" }, group.note || group.group_name || (group.group_uid ? `群 ${group.group_uid}` : group.label)),
                   el("p", { class: "mini-sub mono" }, group.umo),
                 ),
                 el(
@@ -2107,6 +2107,15 @@ function renderGroups() {
             el("h2", { class: "card-title" }, "群组"),
             el("p", { class: "card-subtitle" }, `${items.length} 个已知群`),
           ),
+          button(
+            "一键获取群名",
+            {
+              className: "btn-ghost btn-sm group-name-all",
+              onClick: () => fetchAllGroupNames(),
+            },
+            icon("refresh-cw", 13),
+            el("span", {}, "一键获取群名"),
+          ),
           iconButton("refresh-cw", "刷新", () => refreshCurrent(true), {
             className: "icon-btn",
             size: 14,
@@ -2137,7 +2146,7 @@ function renderGroupList() {
     if (profileFilter === "group" && !item.profile?.exists) return false;
     if (profileFilter === "global" && item.profile?.exists) return false;
     if (!text) return true;
-    return `${item.group_uid || ""} ${item.note || ""} ${item.label} ${item.umo} ${item.platform_name}`
+    return `${item.group_uid || ""} ${item.note || ""} ${item.group_name || ""} ${item.label} ${item.umo} ${item.platform_name}`
       .toLowerCase()
       .includes(text);
   });
@@ -2168,7 +2177,7 @@ function renderGroupList() {
           el(
             "span",
             { class: "group-item-title" },
-            el("span", {}, item.note || (item.group_uid ? `群 ${item.group_uid}` : item.label)),
+            el("span", {}, item.note || item.group_name || (item.group_uid ? `群 ${item.group_uid}` : item.label)),
             item.whitelisted ? null : el("span", { class: "tag is-warning" }, "白名单外"),
           ),
           el("p", { class: "group-item-sub" }, item.umo),
@@ -2264,7 +2273,7 @@ function renderGroupDetail() {
           el(
             "h2",
             { class: "detail-title" },
-            group.note || (group.group_uid ? `群 ${group.group_uid}` : group.label),
+            group.note || group.group_name || (group.group_uid ? `群 ${group.group_uid}` : group.label),
             group.note ? el("span", { class: "tag is-info" }, "已备注") : null,
             profile.exists
               ? el("span", { class: "tag is-success" }, "分群配置")
@@ -2301,6 +2310,15 @@ function renderGroupDetail() {
             },
             icon("pencil", 13),
             el("span", {}, group.note ? "编辑备注" : "添加备注"),
+          ),
+          button(
+            group.group_name ? "刷新群名" : "获取群名",
+            {
+              className: "btn btn-sm",
+              onClick: () => fetchGroupName(group),
+            },
+            icon("refresh-cw", 13),
+            el("span", {}, group.group_name ? "刷新群名" : "获取群名"),
           ),
           profile.exists
             ? button(
@@ -2403,6 +2421,7 @@ function renderGroupDetail() {
             : `${group.platform_name}（${group.platform_id}）`,
         ),
         kvRow("群 UID", group.group_uid || "未分配"),
+        kvRow("群名称", group.group_name || "未获取"),
         kvRow("群 OpenID", group.group_openid),
         kvRow("UMO", group.umo),
         kvRow("备注", group.note || "未备注"),
@@ -2497,7 +2516,7 @@ async function removeAdmin(group, admin) {
 }
 
 async function restoreGroupInheritance(group) {
-  const display = group.group_uid ? `群 ${group.group_uid}` : group.note || group.label;
+  const display = group.note || group.group_name || (group.group_uid ? `群 ${group.group_uid}` : group.label);
   const ok = await confirmAction(
     "恢复继承全局配置",
     `确认让 ${display} 恢复继承全局配置？这会删除该群的独立配置，群管名单、待审记录和验证记录不会删除。`,
@@ -2521,6 +2540,26 @@ async function refreshGroupData(umo) {
     /* 列表刷新失败时仍然刷新详情 */
   }
   if (state.tab === "groups" && umo) await loadGroupDetail(umo);
+}
+
+async function fetchAllGroupNames() {
+  try {
+    const data = await apiPost("groups/names", {});
+    toast(data.message || "群名获取完成", data.remaining ? "warning" : "success", 6000);
+    await refreshGroupData(state.selectedGroup);
+  } catch (error) {
+    toast(cleanError(error), "error", 6000);
+  }
+}
+
+async function fetchGroupName(group) {
+  try {
+    const data = await apiPost("groups/name", { umo: group.umo });
+    toast(data.message || "群名已获取", "success");
+    await refreshGroupData(group.umo);
+  } catch (error) {
+    toast(cleanError(error), "error", 5000);
+  }
 }
 
 async function editGroupNote(group) {
@@ -2563,7 +2602,7 @@ async function openGroupConfig(group) {
   if (!group.profile?.exists) {
     const ok = await confirmAction(
       "创建分群配置",
-      `将为 ${group.group_uid ? `群 ${group.group_uid}` : group.note || group.label} 创建独立配置，初始值复制当前全局配置。创建后该群不再跟随全局修改。`,
+      `将为 ${group.note || group.group_name || (group.group_uid ? `群 ${group.group_uid}` : group.label)} 创建独立配置，初始值复制当前全局配置。创建后该群不再跟随全局修改。`,
       { iconName: "settings", confirmText: "创建并编辑" },
     );
     if (!ok) return;

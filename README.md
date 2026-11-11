@@ -4,7 +4,7 @@
 
 **QQ官方机器人群管插件:入群审批和验证、多功能按钮菜单、成员进退群通知、Web UI控制台、群广播、禁言、监控面板(包含刷屏监控、风险消息撤回、服务器运行状态)和LLM工具**
 
-[![版本 3.0.0](https://img.shields.io/badge/版本-3.0.0-89b4fa.svg)](CHANGELOG.md)
+[![版本 3.1.0](https://img.shields.io/badge/版本-3.1.0-89b4fa.svg)](CHANGELOG.md)
 [![License: CC BY-NC-ND 4.0](https://img.shields.io/badge/License-CC%20BY--NC--ND%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc-nd/4.0/)
 [![作者 简单么么熊](https://img.shields.io/badge/作者-简单么么熊-f5b7c7.svg)](https://github.com/1023286457)
 [![QQ群 1081896895](https://img.shields.io/badge/QQ群-1081896895-12B7F5.svg)](https://qm.qq.com/q/LWmwpA9kuk)
@@ -63,7 +63,7 @@ QQ 官方机器人能做的群管理动作有限，插件把这部分能力整�
 | 总览 | 待审申请、验证队列、群组数量、插件群管、功能开关与运行状态 |
 | 入群审批 | 查看申请资料与问答，直接同意或拒绝；拒绝可填写理由 |
 | 进群验证 | 查看题目、答错次数与剩余时间，放行或重新出题 |
-| 群组 | 查看群 UID、群 OpenID、群 UMO、配置来源、群管名单；添加/移除插件群管。群里发过消息、出现过申请/验证或已有配置的群都会自动记录；群 UID 从 100001 递增并在退群后复用空号；群 OpenID 是 QQ 官方机器人的 `group_openid`，不是 QQ 群号；可为每个群添加备注（可填 QQ 群号） |
+| 群组 | 查看群名称、群 UID、群 OpenID、群 UMO、配置来源、群管名单；添加/移除插件群管。群里发过消息、出现过申请/验证或已有配置的群都会自动记录；群 UID 从 100001 递增并在退群后复用空号；群 OpenID 是 QQ 官方机器人的 `group_openid`，不是 QQ 群号；可为每个群添加备注，详情按钮可「获取群名 / 刷新群名」，列表右上角支持「一键获取群名」 |
 | 刷屏监控 | 展示防刷屏状态、追踪群数、追踪用户、活跃用户、当前速率限制配置和实时追踪用户表；数据每 5 秒自动刷新 |
 | 服务器运行状态 | 单页总览，每 5 秒刷新；支持状态图片上传、采样间隔和毛玻璃配置。QQ 官方平台隐藏好友数、群成员数、协议版本与 QQ 头像，群聊数量使用插件已知群数 |
 | 配置 | 编辑全局或分群配置，支持开关、词表、题库、模板与安全限制；删除分群配置的入口名称为「恢复继承全局」 |
@@ -75,6 +75,8 @@ QQ 官方机器人能做的群管理动作有限，插件把这部分能力整�
 右上角的**调色盘**可以更改控制台主色：支持 6 个预设色和自定义取色。主题色只影响这个控制台，不会修改 AstrBot 其他页面；保存后写入插件数据目录的 `state.json`，下次打开自动恢复。
 
 群备注除了在群组页点「添加备注」外，也可以直接在群里发 `群绑定 群号 [群名]`，例如 `群绑定 123456789 天文社`。备注只用于显示，底层群身份始终是 `group_openid`。
+
+群组详情里的「获取群名 / 刷新群名」会调用 QQ 官方 `GET /v2/groups/{group_openid}/info` 并缓存真实群名。该接口需要 QQ 开放平台白名单权限；没有权限返回 `11253` 时会提示，不影响群备注和群 UID。显示优先级为：群备注 → 接口群名 → 群 UID。群组列表右上角的「一键获取群名」会批量获取未命名 QQ 群，每次最多 30 个，超过后会提示剩余数量。
 
 ---
 
@@ -496,6 +498,7 @@ QQ 官方平台限制：好友数、全部群成员数、OneBot 协议版本和 
 | 控制台主题色偏好 | `data/plugin_data/astrbot_plugin_qq_group_manage/state.json` 的 `ui_preferences` |
 | 自动记录的群组 | `data/plugin_data/astrbot_plugin_qq_group_manage/state.json` 的 `seen_groups` |
 | 群备注 | `data/plugin_data/astrbot_plugin_qq_group_manage/state.json` 的 `group_notes` |
+| 接口获取的群名 | `data/plugin_data/astrbot_plugin_qq_group_manage/state.json` 的 `group_names` |
 | 群 UID 编号 | `data/plugin_data/astrbot_plugin_qq_group_manage/state.json` 的 `group_ids` / `free_group_ids` |
 | 群配置与词表 | AstrBot 插件配置文件的 `group_management.groups` |
 | 全局设置 | AstrBot 插件配置文件的 `group_management.global_settings` |

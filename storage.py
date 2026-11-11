@@ -21,6 +21,7 @@ STATE_KEYS = (
     "verifications",
     "seen_groups",
     "group_notes",
+    "group_names",
     "ui_preferences",
 )
 
@@ -37,6 +38,7 @@ class PluginStorage:
             "verifications": {},
             "seen_groups": {},
             "group_notes": {},
+            "group_names": {},
             "group_ids": {},
             "free_group_ids": [],
             "ui_preferences": {},
@@ -74,6 +76,7 @@ class PluginStorage:
             "verifications",
             "seen_groups",
             "group_notes",
+            "group_names",
             "group_ids",
             "ui_preferences",
         ):
@@ -130,6 +133,9 @@ class PluginStorage:
         for key, note in raw.get("group_notes", {}).items():
             if not isinstance(key, str) or not isinstance(note, str):
                 raise ValueError("群备注必须是字符串键值对象")
+        for key, name in raw.get("group_names", {}).items():
+            if not isinstance(key, str) or not isinstance(name, str):
+                raise ValueError("群名必须是字符串键值对象")
         for key, value in raw.get("group_ids", {}).items():
             if not isinstance(key, str) or not str(value).isdigit():
                 raise ValueError("群 UID 编号必须是字符串数字")
@@ -296,6 +302,36 @@ class PluginStorage:
         if not isinstance(notes, dict):
             return ""
         return str(notes.get(str(umo or "")) or "")
+
+    def group_name(self, umo: str) -> str:
+        names = self.data.get("group_names")
+        if not isinstance(names, dict):
+            return ""
+        return str(names.get(str(umo or "")) or "")
+
+    def set_group_name(self, umo: str, name: str) -> str:
+        umo = str(umo or "").strip()
+        name = str(name or "").strip()[:80]
+        if not umo:
+            return ""
+        names = self.data.get("group_names")
+        if not isinstance(names, dict):
+            names = {}
+            self.data["group_names"] = names
+        before = dict(names)
+        previous = names.get(umo)
+        if name:
+            names[umo] = name
+        else:
+            names.pop(umo, None)
+        if previous == (name or None):
+            return self.group_name(umo)
+        try:
+            self.save()
+        except Exception:
+            self.data["group_names"] = before
+            raise
+        return self.group_name(umo)
 
     def group_uid(self, umo: str) -> str:
         ids = self.data.get("group_ids")
@@ -601,7 +637,7 @@ class PluginStorage:
         before = deepcopy(self.data)
         freed_uid = ""
         try:
-            for section in ("seen_groups", "group_notes", "group_feature_overrides"):
+            for section in ("seen_groups", "group_notes", "group_names", "group_feature_overrides"):
                 self.data.get(section, {}).pop(umo, None)
             self.data.get("group_admins", {}).pop(group_openid, None)
             for key in pending:
@@ -656,6 +692,7 @@ class PluginStorage:
         verifications = data.get("verifications", {})
         seen = data.get("seen_groups", {})
         notes = data.get("group_notes", {})
+        names = data.get("group_names", {})
         prefs = data.get("ui_preferences", {})
         return {
             "kind": "state",
@@ -665,6 +702,7 @@ class PluginStorage:
             "verifications": len(verifications),
             "seen_groups": len(seen),
             "group_notes": len(notes),
+            "group_names": len(names),
             "ui_preferences": len(prefs),
         }
 

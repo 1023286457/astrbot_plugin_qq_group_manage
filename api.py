@@ -93,6 +93,11 @@ class QQGroupManageAPI:
         group_id = quote(group_openid, safe="")
         return await self._request("GET", f"/v2/groups/{group_id}/bot_state")
 
+    async def get_group_info(self, group_openid: str) -> Any:
+        """Fetch group metadata (group_name; whitelist-only on QQ official)."""
+        group_id = quote(group_openid, safe="")
+        return await self._request("GET", f"/v2/groups/{group_id}/info")
+
     async def list_join_requests(
         self,
         group_openid: str,

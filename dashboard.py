@@ -53,7 +53,7 @@ except Exception as exc:  # pragma: no cover - 仅在旧的 AstrBot 上触发
 
 PLUGIN_NAME = "astrbot_plugin_qq_group_manage"
 PLUGIN_DISPLAY_NAME = "QQ官机群管"
-PLUGIN_VERSION = "3.0.0"
+PLUGIN_VERSION = "3.1.0"
 QQ_PLATFORMS = {"qq_official", "qq_official_webhook"}
 VIEW_NAME = "console"
 SECTION_ORDER = (
@@ -245,6 +245,8 @@ class DashboardAPI:
             ("groups/detail", self.get_group_detail, ["GET"], "群组详情"),
             ("groups/admins", self.update_group_admins, ["POST"], "维护群管名单"),
             ("groups/note", self.update_group_note, ["POST"], "保存群备注"),
+            ("groups/name", self.fetch_group_name, ["POST"], "获取 QQ 群名称"),
+            ("groups/names", self.fetch_all_group_names, ["POST"], "批量获取 QQ 群名称"),
             ("spam", self.get_spam, ["GET"], "刷屏监控状态"),
             ("recall", self.get_recall, ["GET"], "风险消息撤回状态"),
             ("status/overview", self.get_server_status, ["GET"], "服务器运行状态"),
@@ -531,6 +533,7 @@ class DashboardAPI:
             "whitelisted": bool(self.plugin._umo_enabled(umo)),
             "last_seen": str(item.get("last_seen") or ""),
             "note": self.plugin.storage.group_note(umo),
+            "group_name": self.plugin.storage.group_name(umo),
             "sources": item.get("sources", []),
         }
 
@@ -1756,6 +1759,132 @@ class DashboardAPI:
             )
         except Exception as exc:
             return self._error(exc, "保存群备注失败")
+
+    async def fetch_group_name(self) -> Any:
+        try:
+            payload = await request.json(default={})
+            if not isinstance(payload, dict):
+                raise DashboardError("请求体格式不正确")
+            umo = str(payload.get("umo") or "").strip()
+            if not valid_group_umo(umo):
+                raise DashboardError("群 UMO 格式不正确")
+            platform_id, _, group_openid = umo.partition(":GroupMessage:")
+            platform = self._platform(platform_id)
+            if platform is None or getattr(platform, "client", None) is None:
+                raise DashboardError("对应平台当前不在线", status_code=503)
+            try:
+                platform_name = str(platform.meta().name)
+            except Exception:
+                platform_name = ""
+            if platform_name not in QQ_PLATFORMS:
+                raise DashboardError("当前平台不支持获取 QQ 群名")
+            try:
+                info = await QQGroupManageAPI(platform.client).get_group_info(
+                    group_openid
+                )
+            except Exception as exc:
+                text = str(exc)
+                if "11253" in text or "whitelist" in text.lower():
+                    raise DashboardError(
+                        "QQ 未开放群信息接口权限（11253），无法获取群名",
+                        status_code=403,
+                    ) from exc
+                raise
+            name = (
+                str(info.get("group_name") or "").strip()
+                if isinstance(info, dict)
+                else ""
+            )
+            if not name:
+                raise DashboardError("接口没有返回群名，可能没有白名单权限", 403)
+            saved = self.plugin.storage.set_group_name(umo, name)
+            return json_response(
+                {
+                    "ok": True,
+                    "group_name": saved,
+                    "message": f"已获取群名：{saved}",
+                }
+            )
+        except Exception as exc:
+            return self._error(exc, "获取群名失败")
+
+    async def fetch_all_group_names(self) -> Any:
+        try:
+            payload = await request.json(default={})
+            force = bool(payload.get("force", False)) if isinstance(payload, dict) else False
+            items = self._group_summaries()
+            candidates = [
+                item
+                for item in items
+                if item.get("group_openid")
+                and (force or not item.get("group_name"))
+            ]
+            if not candidates:
+                return json_response(
+                    {
+                        "ok": True,
+                        "updated": 0,
+                        "failed": 0,
+                        "skipped": 0,
+                        "remaining": 0,
+                        "message": "所有群都已有群名",
+                    }
+                )
+            updated = failed = skipped = 0
+            errors: list[str] = []
+            processed = candidates[:30]
+            for item in processed:
+                platform = self._platform(str(item.get("platform_id") or ""))
+                try:
+                    platform_name = str(platform.meta().name) if platform else ""
+                except Exception:
+                    platform_name = ""
+                if platform is None or getattr(platform, "client", None) is None:
+                    skipped += 1
+                    continue
+                if platform_name not in QQ_PLATFORMS:
+                    skipped += 1
+                    continue
+                try:
+                    info = await QQGroupManageAPI(platform.client).get_group_info(
+                        str(item["group_openid"])
+                    )
+                    name = (
+                        str(info.get("group_name") or "").strip()
+                        if isinstance(info, dict)
+                        else ""
+                    )
+                    if not name:
+                        raise RuntimeError("接口未返回 group_name")
+                    self.plugin.storage.set_group_name(str(item["umo"]), name)
+                    updated += 1
+                except Exception as exc:
+                    text = str(exc)
+                    if "11253" in text or "whitelist" in text.lower():
+                        raise DashboardError(
+                            f"已获取 {updated} 个群名，后续群没有接口权限（11253）",
+                            status_code=403,
+                        ) from exc
+                    failed += 1
+                    if len(errors) < 3:
+                        errors.append(str(item.get("note") or item.get("umo")))
+                await asyncio.sleep(0.05)
+            remaining = max(0, len(candidates) - len(processed))
+            suffix = f"；剩余 {remaining} 个请再点一次" if remaining else ""
+            if errors:
+                suffix += f"；失败：{', '.join(errors)}"
+            return json_response(
+                {
+                    "ok": True,
+                    "updated": updated,
+                    "failed": failed,
+                    "skipped": skipped,
+                    "remaining": remaining,
+                    "message": f"已获取 {updated} 个群名{suffix}",
+                }
+            )
+        except Exception as exc:
+            return self._error(exc, "批量获取群名失败")
 
     async def send_broadcast(self) -> Any:
         try:
