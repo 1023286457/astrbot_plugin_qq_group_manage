@@ -18,6 +18,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any
 
+import aiohttp
 from astrbot.api import logger
 
 from .api import QQ_PLATFORMS, QQGroupManageAPI
@@ -53,7 +54,18 @@ except Exception as exc:  # pragma: no cover - 仅在旧的 AstrBot 上触发
 
 PLUGIN_NAME = "astrbot_plugin_qq_group_manage"
 PLUGIN_DISPLAY_NAME = "QQ官机群管"
-PLUGIN_VERSION = "3.1.0"
+PLUGIN_VERSION = "3.1.1"
+GITHUB_RELEASE_API = (
+    "https://api.github.com/repos/1023286457/"
+    "astrbot_plugin_qq_group_manage/releases/latest"
+)
+
+
+def _version_key(version: str) -> tuple[int, ...]:
+    parts = [int(value) for value in re.findall(r"\d+", str(version or ""))]
+    return tuple((parts + [0, 0, 0])[:3])
+
+
 QQ_PLATFORMS = {"qq_official", "qq_official_webhook"}
 VIEW_NAME = "console"
 SECTION_ORDER = (
@@ -264,6 +276,7 @@ class DashboardAPI:
             ("panel/images/delete", self.delete_panel_image, ["POST"], "删除群管面板图片"),
             ("config", self.get_config, ["GET"], "读取插件配置"),
             ("config/save", self.save_config, ["POST"], "保存插件配置"),
+            ("update/status", self.get_update_status, ["GET"], "检查插件更新"),
             (
                 "config/group/create",
                 self.create_group_profile,
@@ -1066,6 +1079,10 @@ class DashboardAPI:
             )
         group_config = GroupConfig(self.plugin.config)
         data = group_config.data
+        # 保存分群配置即视为要使用分群覆盖；否则 _group_setting 会
+        # 回落到全局值，页面看起来像“保存不上”。
+        management = self.plugin.config.setdefault("group_management", {})
+        management["enabled"] = True
         matches = [
             item
             for item in data.get("groups", [])
@@ -2140,6 +2157,44 @@ class DashboardAPI:
         except Exception as exc:
             return self._error(exc, "保存插件配置失败")
 
+    async def get_update_status(self) -> Any:
+        try:
+            latest, published_at = await self._latest_release_version()
+            return json_response(
+                {
+                    "ok": True,
+                    "current": PLUGIN_VERSION,
+                    "latest": latest,
+                    "has_update": bool(latest)
+                    and _version_key(latest) > _version_key(PLUGIN_VERSION),
+                    "published_at": published_at,
+                }
+            )
+        except Exception as exc:
+            return self._error(exc, "检查插件更新失败")
+
+    async def _latest_release_version(self) -> tuple[str, str]:
+        timeout = aiohttp.ClientTimeout(total=12)
+        headers = {
+            "Accept": "application/vnd.github+json",
+            "User-Agent": f"{PLUGIN_NAME}/{PLUGIN_VERSION}",
+        }
+        async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+            async with session.get(GITHUB_RELEASE_API) as response:
+                if response.status == 404:
+                    raise DashboardError("GitHub 上还没有发布版本")
+                if response.status == 403:
+                    raise DashboardError("GitHub API 访问频率受限，请稍后再试")
+                if response.status != 200:
+                    raise DashboardError(f"GitHub 返回 HTTP {response.status}")
+                payload = await response.json()
+        if not isinstance(payload, dict):
+            raise DashboardError("GitHub Release 数据格式不正确")
+        latest = str(payload.get("tag_name") or "").lstrip("vV")
+        if not latest:
+            raise DashboardError("GitHub Release 缺少版本号")
+        return latest, str(payload.get("published_at") or "")
+
     async def create_group_profile(self) -> Any:
         try:
             payload = await request.json(default={})
@@ -2161,6 +2216,7 @@ class DashboardAPI:
                 raise DashboardError("该群已经存在分群配置", status_code=409)
             before = deepcopy(dict(self.plugin.config))
             try:
+                self.plugin.config.setdefault("group_management", {})["enabled"] = True
                 profile = group_config.snapshot(umo)
                 group_config.data.setdefault("groups", []).append(profile)
                 self._save_config(self.plugin)

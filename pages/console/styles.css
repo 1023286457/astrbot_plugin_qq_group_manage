@@ -369,6 +369,33 @@ a:hover {
   display: none;
 }
 
+.tabs-update {
+  position: absolute;
+  top: 50%;
+  right: 26px;
+  z-index: 2;
+  padding: 6px 10px;
+  transform: translateY(-50%);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+}
+
+.tabs-update.tabs-update:hover,
+.tabs-update.tabs-update:active,
+.tabs-update.tabs-update:focus-visible {
+  transform: translateY(-50%);
+}
+
+@media (max-width: 720px) {
+  .tabs-update {
+    right: 12px;
+    padding: 6px 8px;
+  }
+
+  .tabs-update span:last-child {
+    display: none;
+  }
+}
+
 .tab {
   position: relative;
   display: inline-flex;
@@ -2565,6 +2592,147 @@ a:hover {
   padding: 14px 20px 18px;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.tpl-field-with-edit {
+  display: grid;
+  gap: 8px;
+}
+
+.tpl-edit-btn {
+  justify-self: start;
+}
+
+.tpl-editor-modal {
+  width: min(1020px, 96vw);
+  max-height: 92vh;
+}
+
+.tpl-editor-modal .modal-body {
+  padding-top: 10px;
+}
+
+.tpl-editor {
+  display: grid;
+  gap: 12px;
+}
+
+.tpl-editor-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.tpl-editor-tabs {
+  width: auto;
+}
+
+.tpl-editor-hint {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.tpl-editor-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 14px;
+}
+
+.tpl-editor-pane {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+}
+
+.tpl-editor-label {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.tpl-editor-textarea {
+  width: 100%;
+  min-height: 340px;
+  padding: 12px;
+  resize: vertical;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-family: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.tpl-editor-textarea:focus {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px var(--brand-soft);
+  outline: none;
+}
+
+.tpl-editor-preview {
+  min-height: 340px;
+  max-height: 52vh;
+  padding: 14px;
+  overflow: auto;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 1.9;
+  overflow-wrap: anywhere;
+}
+
+.tpl-editor-empty {
+  color: var(--muted);
+}
+
+.tpl-at {
+  display: inline-block;
+  padding: 1px 7px;
+  color: var(--brand);
+  background: var(--brand-soft);
+  border-radius: 5px;
+  font-weight: 650;
+}
+
+.tpl-avatar {
+  display: inline-flex;
+  width: 30px;
+  height: 30px;
+  align-items: center;
+  justify-content: center;
+  vertical-align: middle;
+  color: var(--muted);
+  background: var(--surface-3);
+  border: 1px dashed var(--border);
+  border-radius: 50%;
+  font-size: 9px;
+}
+
+.tpl-editor-tools {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.tpl-editor-tools-label {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+@media (max-width: 780px) {
+  .tpl-editor-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .tpl-editor-textarea,
+  .tpl-editor-preview {
+    min-height: 220px;
+  }
 }
 
 .modal-error {

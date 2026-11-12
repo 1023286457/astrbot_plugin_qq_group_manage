@@ -8,7 +8,7 @@ const modalRoot = document.getElementById("modal-root");
 const toastRoot = document.getElementById("toast-root");
 
 const PLUGIN_NAME = "astrbot_plugin_qq_group_manage";
-const PLUGIN_VERSION = "3.1.0";
+const PLUGIN_VERSION = "3.1.1";
 const TAB_IDS = ["overview", "pending", "verify", "groups", "spam", "settings", "broadcast", "data"];
 
 const TABS = [
@@ -368,6 +368,7 @@ function showModal({
   cancelText = "取消",
   danger = false,
   onConfirm = null,
+  cardClass = "",
 }) {
   return new Promise((resolve) => {
     if (!modalRoot) {
@@ -388,7 +389,7 @@ function showModal({
     const card = el(
       "div",
       {
-        class: "modal-card",
+        class: `modal-card ${cardClass}`.trim(),
         role: "dialog",
         "aria-modal": "true",
         "aria-label": title,
@@ -674,6 +675,17 @@ function renderShell() {
             ),
           ),
         ),
+        button(
+          "检查更新",
+          {
+            className: "btn btn-ghost btn-sm tabs-update",
+            id: "update-plugin-button",
+            title: "检查 GitHub 最新版本，不会自动下载或覆盖插件",
+            onClick: () => checkPluginUpdate(),
+          },
+          icon("refresh-cw", 13),
+          el("span", {}, "检查更新"),
+        ),
       ),
       el("main", { class: "page", id: "page", "aria-live": "polite" }),
     ),
@@ -729,6 +741,35 @@ function applyThemeColor(color) {
   const root = document.documentElement;
   if (color) root.style.setProperty("--brand", color);
   else root.style.removeProperty("--brand");
+}
+
+async function checkPluginUpdate() {
+  const buttonNode = document.getElementById("update-plugin-button");
+  if (buttonNode) {
+    buttonNode.disabled = true;
+    buttonNode.replaceChildren(
+      el("span", { class: "spinner" }),
+      el("span", {}, "检查中…"),
+    );
+  }
+  try {
+    const status = await apiGet("update/status");
+    if (status?.has_update) {
+      toast(`有新版本：v${status.latest}`, "success", 7000);
+    } else {
+      toast(`当前已是最新版本 v${status?.current || PLUGIN_VERSION}`, "success");
+    }
+  } catch (error) {
+    toast(cleanError(error), "error", 6000);
+  } finally {
+    if (buttonNode) {
+      buttonNode.disabled = false;
+      buttonNode.replaceChildren(
+        icon("refresh-cw", 13),
+        el("span", {}, "检查更新"),
+      );
+    }
+  }
 }
 
 async function openThemeDialog() {
@@ -3699,7 +3740,8 @@ function renderSettings() {
                 el(
                   "option",
                   { value: group.umo },
-                  group.label + (group.profile?.exists ? " · 已配置" : " · 继承"),
+                  (group.group_name || group.group_uid || group.label) +
+                    (group.profile?.exists ? " · 已配置" : " · 继承"),
                 ),
               )
             : [el("option", { value: "" }, "暂无群组")]),
@@ -3881,6 +3923,23 @@ function fieldControl(field, value) {
       },
     });
     textarea.value = value ?? "";
+    if (key === "member_join_message" || key === "member_leave_message") {
+      return el(
+        "div",
+        { class: "tpl-field-with-edit" },
+        textarea,
+        button(
+          "编辑与预览",
+          {
+            className: "btn btn-ghost btn-sm tpl-edit-btn",
+            type: "button",
+            onClick: () => openTemplateEditor(field),
+          },
+          icon("pencil", 13),
+          el("span", {}, "编辑与预览"),
+        ),
+      );
+    }
     return textarea;
   }
 
@@ -3964,6 +4023,184 @@ function fieldControl(field, value) {
   }
 
   return el("input", { type: "text", value: value ?? "" });
+}
+
+function escapeTemplateText(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function templatePreviewHtml(raw, format, isLeave) {
+  const atLabel = isLeave ? "@成员OpenID" : "@成员";
+  let html = escapeTemplateText(raw)
+    .replaceAll("{member_at}", `<span class="tpl-at">${atLabel}</span>`)
+    .replace(/\{member_avatar(?::(\d+))?\}/g, (match, size) => {
+      const px = Math.max(24, Math.min(parseInt(size, 10) || 100, 320));
+      return `<span class="tpl-avatar" style="width:${px}px;height:${px}px">头像</span>`;
+    });
+  if (format === "markdown") {
+    html = html
+      .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+      .replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>")
+      .replace(/~~(.+?)~~/g, "<del>$1</del>")
+      .replace(/`([^`]+)`/g, "<code>$1</code>");
+  }
+  return html.replace(/\n/g, "<br>");
+}
+
+async function openTemplateEditor(field) {
+  const key = field.key;
+  const isLeave = key === "member_leave_message";
+  let format = "markdown";
+  const textarea = el("textarea", {
+    class: "tpl-editor-textarea",
+    rows: 18,
+    placeholder: field.placeholder || "输入模板内容",
+    "aria-label": `${field.label}内容`,
+  });
+  textarea.value = state.formValues[key] ?? field.default ?? "";
+  const preview = el("div", { class: "tpl-editor-preview" });
+  const tabs = el("div", { class: "segmented tpl-editor-tabs" });
+  const textTab = el(
+    "button",
+    { type: "button", onclick: () => setFormat("text") },
+    "纯文本",
+  );
+  const markdownTab = el(
+    "button",
+    { type: "button", onclick: () => setFormat("markdown") },
+    "Markdown",
+  );
+  tabs.append(textTab, markdownTab);
+
+  function renderPreview() {
+    preview.innerHTML = templatePreviewHtml(textarea.value, format, isLeave);
+    if (!textarea.value.trim()) {
+      preview.innerHTML = '<span class="tpl-editor-empty">（空内容）</span>';
+    }
+  }
+
+  function setFormat(next) {
+    format = next;
+    textTab.classList.toggle("is-active", format === "text");
+    markdownTab.classList.toggle("is-active", format === "markdown");
+    renderPreview();
+  }
+
+  function insertSnippet(snippet) {
+    const start = textarea.selectionStart ?? textarea.value.length;
+    const end = textarea.selectionEnd ?? start;
+    textarea.value =
+      textarea.value.slice(0, start) + snippet + textarea.value.slice(end);
+    textarea.focus();
+    textarea.setSelectionRange(start + snippet.length, start + snippet.length);
+    renderPreview();
+  }
+
+  const editor = el(
+    "div",
+    { class: "tpl-editor" },
+    el(
+      "div",
+      { class: "tpl-editor-head" },
+      tabs,
+      el(
+        "span",
+        { class: "tpl-editor-hint" },
+        "变量：{member_at} 会艾特成员；{member_avatar:40} 小头像，{member_avatar:160} 大头像",
+      ),
+    ),
+    el(
+      "div",
+      { class: "tpl-editor-grid" },
+      el(
+        "div",
+        { class: "tpl-editor-pane" },
+        el("span", { class: "tpl-editor-label" }, "模板内容（支持变量）"),
+        textarea,
+      ),
+      el(
+        "div",
+        { class: "tpl-editor-pane" },
+        el("span", { class: "tpl-editor-label" }, "QQ 渲染效果预览"),
+        preview,
+      ),
+    ),
+    el(
+      "div",
+      { class: "tpl-editor-tools" },
+      el("span", { class: "tpl-editor-tools-label" }, "插入变量"),
+      button(
+        "{member_at}",
+        { className: "btn btn-ghost btn-sm", type: "button", onClick: () => insertSnippet("{member_at}") },
+        icon("at-sign", 12),
+        el("span", {}, isLeave ? "成员OpenID" : "@群员"),
+      ),
+      button(
+        "{member_avatar:40}",
+        { className: "btn btn-ghost btn-sm", type: "button", onClick: () => insertSnippet("{member_avatar:40}") },
+        icon("user", 12),
+        el("span", {}, "头像·小"),
+      ),
+      button(
+        "{member_avatar:100}",
+        { className: "btn btn-ghost btn-sm", type: "button", onClick: () => insertSnippet("{member_avatar:100}") },
+        icon("user", 12),
+        el("span", {}, "头像"),
+      ),
+      button(
+        "{member_avatar:160}",
+        { className: "btn btn-ghost btn-sm", type: "button", onClick: () => insertSnippet("{member_avatar:160}") },
+        icon("user", 12),
+        el("span", {}, "头像·大"),
+      ),
+      button(
+        "恢复默认",
+        {
+          className: "btn btn-ghost btn-sm",
+          type: "button",
+          onClick: () => {
+            textarea.value = field.default ?? "";
+            renderPreview();
+          },
+        },
+        icon("rotate-ccw", 12),
+        el("span", {}, "恢复默认"),
+      ),
+    ),
+  );
+  textarea.addEventListener("input", renderPreview);
+  setFormat("markdown");
+  renderPreview();
+
+  const saved = await showModal({
+    title: field.label,
+    description: field.hint || "编辑后可直接预览，保存后立即生效。",
+    iconName: "pencil",
+    body: editor,
+    confirmText: "保存此项",
+    cancelText: "取消",
+    cardClass: "tpl-editor-modal",
+    onConfirm: async () => {
+      if (state.configScope === "group" && !state.selectedGroup) {
+        throw new Error("请先选择一个群组");
+      }
+      const text = textarea.value;
+      await apiPost("config/save", {
+        scope: state.configScope,
+        umo: state.configScope === "group" ? state.selectedGroup : "",
+        values: { [key]: text },
+      });
+      state.formValues[key] = text;
+      state.initialValues[key] = text;
+      toast("模板已保存");
+    },
+  });
+  if (saved) renderSettings();
 }
 
 function tagEditor(field, values) {

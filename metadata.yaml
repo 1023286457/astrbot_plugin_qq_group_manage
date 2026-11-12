@@ -3,7 +3,7 @@ display_name: QQ官机群管
 desc: QQ官方机器人群管插件:入群审批和验证、多功能按钮菜单、成员进退群通知、Web UI控制台、群广播、禁言、监控面板(包含刷屏监控、风险消息撤回、服务器运行状态)和LLM工具
 short_desc: QQ官方机器人群管插件:入群审批和验证、多功能按钮菜单、成员进退群通知、Web UI控制台、群广播、禁言、监控面板(包含刷屏监控、风险消息撤回、服务器运行状态)和LLM工具
 author: 简单么么熊
-version: 3.1.0
+version: 3.1.1
 astrbot_version: ">=4.26.0"
 repo: https://github.com/1023286457/astrbot_plugin_qq_group_manage/tree/main
 support_platforms:

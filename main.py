@@ -555,7 +555,7 @@ def review_quote(event: AstrMessageEvent) -> set[str] | None:
     PLUGIN_NAME,
     "简单么么熊",
     "QQ 官方机器人群管理：禁言、入群申请审批、分群管理员与 LLM 工具",
-    "3.1.0",
+    "3.1.1",
 )
 class QQGroupAdminPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig) -> None:
@@ -3296,7 +3296,13 @@ def render_member_notice(
             "https://q.qlogo.cn/qqapp/"
             f"{quote(appid, safe='')}/{quote(member_openid, safe='')}/640"
         )
-        avatar_value = f"![头像 #100px #100px]({avatar_url})"
+
+        def avatar_repl(match: re.Match[str]) -> str:
+            size = int(match.group(1) or 100)
+            size = max(24, min(size, 320))
+            return f"![头像 #{size}px #{size}px]({avatar_url})"
+
+        template = re.sub(r"\{member_avatar(?::(\d+))?\}", avatar_repl, template)
     return template.replace("{member_at}", member_value).replace(
         "{member_avatar}", avatar_value
     )

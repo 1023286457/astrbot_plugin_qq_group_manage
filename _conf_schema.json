@@ -138,7 +138,7 @@
                 "description": "成员进群欢迎模板",
                 "type": "text",
                 "default": "欢迎 {member_at} 加入群聊！",
-                "hint": "支持 {member_at} 和 {member_avatar}。"
+                "hint": "支持 {member_at}；头像可写 {member_avatar:40}（小）或 {member_avatar:160}（大）。"
               },
               "enable_member_leave_notice": {
                 "description": "启用成员退群通知",
@@ -150,7 +150,7 @@
                 "description": "成员退群通知模板",
                 "type": "text",
                 "default": "有成员退出了群聊。",
-                "hint": "{member_at} 只会显示成员 OpenID；{member_avatar} 仍可显示头像。"
+                "hint": "{member_at} 只会显示成员 OpenID；{member_avatar:40}/{member_avatar:160} 仍可显示头像。"
               }
             }
           },
@@ -658,7 +658,7 @@
                     "description": "成员进群欢迎模板",
                     "type": "text",
                     "default": "欢迎 {member_at} 加入群聊！",
-                    "hint": "支持 {member_at} 和 {member_avatar}。"
+                    "hint": "支持 {member_at}；头像可写 {member_avatar:40}（小）或 {member_avatar:160}（大）。"
                   },
                   "enable_member_leave_notice": {
                     "description": "启用成员退群通知",
@@ -670,7 +670,7 @@
                     "description": "成员退群通知模板",
                     "type": "text",
                     "default": "有成员退出了群聊。",
-                    "hint": "{member_at} 只会显示成员 OpenID；{member_avatar} 仍可显示头像。"
+                    "hint": "{member_at} 只会显示成员 OpenID；{member_avatar:40}/{member_avatar:160} 仍可显示头像。"
                   }
                 },
                 "condition": {
@@ -1147,7 +1147,7 @@
   "member_notice_settings": {
     "description": "⑤ 成员进退群通知",
     "type": "object",
-    "hint": "开关可按群覆盖，消息模板仍由所有群共用。支持 {member_at} 和 {member_avatar}。",
+    "hint": "开关可按群覆盖，消息模板仍由所有群共用。支持 {member_at}；头像可写 {member_avatar:40}（小）或 {member_avatar:160}（大）。",
     "items": {
       "enable_member_join_notice": {
         "description": "启用成员进群欢迎消息",
@@ -1159,7 +1159,7 @@
         "description": "成员进群欢迎模板",
         "type": "text",
         "default": "欢迎 {member_at} 加入群聊！",
-        "hint": "支持 {member_at} 和 {member_avatar}。"
+        "hint": "支持 {member_at}；头像可写 {member_avatar:40}（小）或 {member_avatar:160}（大）。"
       },
       "enable_member_leave_notice": {
         "description": "启用成员退群通知",
@@ -1171,7 +1171,7 @@
         "description": "成员退群通知模板",
         "type": "text",
         "default": "有成员退出了群聊。",
-        "hint": "{member_at} 只会显示成员 OpenID；{member_avatar} 仍可显示头像。"
+        "hint": "{member_at} 只会显示成员 OpenID；{member_avatar:40}/{member_avatar:160} 仍可显示头像。"
       }
     },
     "invisible": true
