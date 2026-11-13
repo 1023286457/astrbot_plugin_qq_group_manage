@@ -456,6 +456,8 @@ def format_group_admin_help(default_duration: str) -> str:
         f"> 禁言成员；不填时间默认 **{default_duration}**\n\n"
         "> `解禁 @用户`  \n"
         "> 解除成员禁言\n\n"
+        "> `踢人 @用户`  \n"
+        "> 批量移出群成员；内测接口，单次最多 20 人\n\n"
         "> `禁言状态`  \n"
         "> 查看全员禁言规则及被禁言成员\n\n"
         "## 群管管理\n\n"
@@ -555,7 +557,7 @@ def review_quote(event: AstrMessageEvent) -> set[str] | None:
     PLUGIN_NAME,
     "简单么么熊",
     "QQ 官方机器人群管理：禁言、入群申请审批、分群管理员与 LLM 工具",
-    "3.1.2",
+    "3.1.3",
 )
 class QQGroupAdminPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig) -> None:
@@ -2090,6 +2092,64 @@ class QQGroupAdminPlugin(Star):
             return
         yield event.plain_result(f"已解除 {len(targets)} 名成员的禁言。")
 
+    @filter.command("踢人")
+    async def kick_members_command(self, event: AstrMessageEvent) -> None:
+        """批量移出被艾特的群成员（QQ 官方内测接口，单次最多 20 人）。"""
+        if not self._is_qq_group(event):
+            yield event.plain_result("该指令仅支持 QQ 官方机器人群聊。")
+            return
+        if not self._event_feature_setting(event, "enable_group_admin_commands"):
+            yield event.plain_result("群管基础指令已关闭。")
+            return
+        if not self._can_manage(event):
+            yield event.plain_result("你没有本群群管权限。")
+            return
+        targets = self._mentioned_members(event, limit=20)
+        if not targets:
+            yield event.plain_result("请艾特要移出的群成员，例如：踢人 @用户")
+            return
+        platform = self._platform(event)
+        if platform is None or getattr(platform, "client", None) is None:
+            yield event.plain_result("对应的 QQ 平台当前不在线。")
+            return
+        try:
+            result = await asyncio.wait_for(
+                QQGroupManageAPI(platform.client).batch_remove_members(
+                    event.get_group_id(),
+                    targets,
+                ),
+                timeout=20,
+            )
+        except asyncio.TimeoutError:
+            yield event.plain_result("踢人请求超时，请稍后刷新群成员确认结果。")
+            return
+        except Exception as exc:
+            logger.exception("[%s] 批量移出群成员失败", PLUGIN_NAME)
+            detail = str(exc)
+            if "11253" in detail:
+                yield event.plain_result(
+                    "踢人失败：QQ 未开放批量移出成员接口权限（11253，内测白名单）。"
+                )
+            else:
+                yield event.plain_result(f"踢人失败：{detail[:200]}")
+            return
+        if isinstance(result, dict) and str(
+            result.get("remove_members_result") or ""
+        ).lower() not in {"", "success"}:
+            yield event.plain_result(
+                f"踢人失败：接口返回 {result.get('remove_members_result')}"
+            )
+            return
+        blacklist_failed = (
+            result.get("add_to_member_blacklist_fail_openids")
+            if isinstance(result, dict)
+            else None
+        )
+        message = f"已移出 {len(targets)} 名群成员。"
+        if isinstance(blacklist_failed, list) and blacklist_failed:
+            message += f"（{len(blacklist_failed)} 名加入黑名单失败）"
+        yield event.plain_result(message)
+
     @filter.command("添加群管")
     async def add_group_admin(self, event: AstrMessageEvent) -> None:
         if not self._is_qq_group(event):
@@ -3182,7 +3242,9 @@ class QQGroupAdminPlugin(Star):
             or self._qq_member_role(event) in {"owner", "admin"}
         )
 
-    def _mentioned_members(self, event: AstrMessageEvent) -> list[str]:
+    def _mentioned_members(
+        self, event: AstrMessageEvent, limit: int = 10
+    ) -> list[str]:
         raw = getattr(event.message_obj, "raw_message", None)
         mentions = getattr(raw, "mentions", None) or []
         targets: list[str] = []
@@ -3203,7 +3265,7 @@ class QQGroupAdminPlugin(Star):
             }:
                 if str(part.qq) not in targets:
                     targets.append(str(part.qq))
-        return targets[:10]
+        return targets[: max(1, min(int(limit), 20))]
 
     def _validate_duration(self, seconds: int, group_umo: str = "") -> None:
         maximum = max(

@@ -54,7 +54,7 @@ except Exception as exc:  # pragma: no cover - 仅在旧的 AstrBot 上触发
 
 PLUGIN_NAME = "astrbot_plugin_qq_group_manage"
 PLUGIN_DISPLAY_NAME = "QQ官机群管"
-PLUGIN_VERSION = "3.1.2"
+PLUGIN_VERSION = "3.1.3"
 GITHUB_RELEASE_API = (
     "https://api.github.com/repos/1023286457/"
     "astrbot_plugin_qq_group_manage/releases/latest"

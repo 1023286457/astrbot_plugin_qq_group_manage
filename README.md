@@ -4,7 +4,7 @@
 
 **QQ官方机器人群管插件:入群审批和验证、多功能按钮菜单、成员进退群通知、Web UI控制台、群广播、禁言、监控面板(包含刷屏监控、风险消息撤回、服务器运行状态)和LLM工具**
 
-[![版本 3.1.2](https://img.shields.io/badge/版本-3.1.2-89b4fa.svg)](CHANGELOG.md)
+[![版本 3.1.3](https://img.shields.io/badge/版本-3.1.3-89b4fa.svg)](CHANGELOG.md)
 [![License: CC BY-NC-ND 4.0](https://img.shields.io/badge/License-CC%20BY--NC--ND%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc-nd/4.0/)
 [![作者 简单么么熊](https://img.shields.io/badge/作者-简单么么熊-f5b7c7.svg)](https://github.com/1023286457)
 [![QQ群 1081896895](https://img.shields.io/badge/QQ群-1081896895-12B7F5.svg)](https://qm.qq.com/q/LWmwpA9kuk)
@@ -150,6 +150,7 @@ https://github.com/1023286457/astrbot_plugin_qq_group_manage
 | --- | --- |
 | `禁言 @用户 [时间]` | 禁言一个或多个成员，省略时间按默认 **1 分钟** |
 | `解禁 @用户` | 解除指定成员禁言 |
+| `踢人 @用户` | 批量移出群成员，单次最多 20 人；QQ 官方内测接口，当前机器人暂时没有调用权限（11253），待官方开放白名单后使用 |
 | `禁言状态` | 查看全员禁言规则与当前被禁言的成员 |
 | `添加群管 @用户` / `删除群管 @用户` | 维护本群插件群管名单 |
 | `群管列表` / `群管帮助` | 查看群管名单、可用指令 |

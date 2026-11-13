@@ -93,6 +93,27 @@ class QQGroupManageAPI:
         group_id = quote(group_openid, safe="")
         return await self._request("GET", f"/v2/groups/{group_id}/bot_state")
 
+    async def batch_remove_members(
+        self,
+        group_openid: str,
+        member_openids: list[str],
+        *,
+        add_to_blacklist: bool = False,
+    ) -> Any:
+        """Remove up to 20 members from a group (whitelist-only)."""
+        member_ids = [str(member) for member in member_openids if str(member)][:20]
+        if not member_ids:
+            raise ValueError("至少需要一名群成员 OpenID")
+        group_id = quote(group_openid, safe="")
+        payload: dict[str, Any] = {"member_openids": member_ids}
+        if add_to_blacklist:
+            payload["add_to_member_blacklist"] = True
+        return await self._request(
+            "POST",
+            f"/v2/groups/{group_id}/batch_remove_members",
+            payload=payload,
+        )
+
     async def get_group_info(self, group_openid: str) -> Any:
         """Fetch group metadata (group_name; whitelist-only on QQ official)."""
         group_id = quote(group_openid, safe="")
