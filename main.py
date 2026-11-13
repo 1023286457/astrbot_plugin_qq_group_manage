@@ -555,7 +555,7 @@ def review_quote(event: AstrMessageEvent) -> set[str] | None:
     PLUGIN_NAME,
     "简单么么熊",
     "QQ 官方机器人群管理：禁言、入群申请审批、分群管理员与 LLM 工具",
-    "3.1.1",
+    "3.1.2",
 )
 class QQGroupAdminPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig) -> None:
@@ -1629,7 +1629,7 @@ class QQGroupAdminPlugin(Star):
                 )
             except Exception:
                 logger.exception("[%s] 按钮审批入群申请失败", PLUGIN_NAME)
-                result = "入群申请审批失败，请查看机器人日志并核实申请状态。"
+                result = "入群申请审批失败\n该申请可能已被其他管理员处理"
             else:
                 self._record_reviewed_request(*request_key)
                 result = (

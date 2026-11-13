@@ -2415,6 +2415,12 @@ a:hover {
   animation: toast-in 0.25s var(--ease);
 }
 
+.toast-copy {
+  min-width: 0;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
 .toast.is-success {
   border-left-color: var(--success);
 }

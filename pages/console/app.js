@@ -8,7 +8,7 @@ const modalRoot = document.getElementById("modal-root");
 const toastRoot = document.getElementById("toast-root");
 
 const PLUGIN_NAME = "astrbot_plugin_qq_group_manage";
-const PLUGIN_VERSION = "3.1.1";
+const PLUGIN_VERSION = "3.1.2";
 const TAB_IDS = ["overview", "pending", "verify", "groups", "spam", "settings", "broadcast", "data"];
 
 const TABS = [
@@ -1801,6 +1801,15 @@ function pendingCard(item) {
       "div",
       { class: "queue-actions" },
       button(
+        "删除",
+        {
+          className: "btn-ghost btn-sm",
+          onClick: () => deletePending(item),
+        },
+        icon("trash", 13),
+        el("span", {}, "删除"),
+      ),
+      button(
         "拒绝",
         {
           className: "btn-danger btn-sm",
@@ -1844,6 +1853,25 @@ async function declinePending(item) {
   await runPendingAction(item, "decline", reason);
 }
 
+async function deletePending(item) {
+  const ok = await confirmAction(
+    "删除后台待审记录",
+    `只删除后台这条待审记录，不会同意或拒绝 QQ 群里的入群申请：${item.nickname || "该用户"} · ${item.group_label}`,
+    { iconName: "trash", confirmText: "删除记录", danger: true },
+  );
+  if (!ok) return;
+  try {
+    const result = await apiPost("pending/delete", { id: item.id });
+    toast(result?.message || "已删除后台待审记录", "success", 5000);
+    state.busy.delete(item.id);
+    if (state.tab === "pending") await loadTab("pending");
+    await refreshOverviewSilent();
+    syncBadges();
+  } catch (error) {
+    toast(cleanError(error), "error", 5000);
+  }
+}
+
 async function runPendingAction(item, action, reason = "") {
   state.busy.add(item.id);
   renderPendingList();
@@ -1859,6 +1887,13 @@ async function runPendingAction(item, action, reason = "") {
     syncBadges();
   } catch (error) {
     toast(cleanError(error), "error", 5000);
+    if (state.tab === "pending") {
+      try {
+        await loadTab("pending");
+      } catch {
+        /* 保留当前列表，错误已在上面提示 */
+      }
+    }
   } finally {
     state.busy.delete(item.id);
     if (state.tab === "pending") renderPendingList();

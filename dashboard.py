@@ -54,7 +54,7 @@ except Exception as exc:  # pragma: no cover - 仅在旧的 AstrBot 上触发
 
 PLUGIN_NAME = "astrbot_plugin_qq_group_manage"
 PLUGIN_DISPLAY_NAME = "QQ官机群管"
-PLUGIN_VERSION = "3.1.1"
+PLUGIN_VERSION = "3.1.2"
 GITHUB_RELEASE_API = (
     "https://api.github.com/repos/1023286457/"
     "astrbot_plugin_qq_group_manage/releases/latest"
@@ -234,6 +234,7 @@ class DashboardAPI:
             ("overview", self.get_overview, ["GET"], "群管总览"),
             ("pending", self.get_pending, ["GET"], "待审批入群申请"),
             ("pending/review", self.review_pending, ["POST"], "审批入群申请"),
+            ("pending/delete", self.delete_pending, ["POST"], "删除本地待审记录"),
             ("verifications", self.get_verifications, ["GET"], "进群验证队列"),
             (
                 "verifications/release",
@@ -366,6 +367,20 @@ class DashboardAPI:
     @staticmethod
     def _group_umo(platform_id: str, group_openid: str) -> str:
         return f"{platform_id}:GroupMessage:{group_openid}"
+
+    def _group_label(self, platform_id: str, group_openid: str) -> str:
+        """Group display name: note > API group name > UID > platform + openid."""
+        umo = self._group_umo(platform_id, group_openid)
+        note = self.plugin.storage.group_note(umo)
+        if note:
+            return note
+        name = self.plugin.storage.group_name(umo)
+        if name:
+            return name
+        uid = self.plugin.storage.group_uid(umo)
+        if uid:
+            return f"群 {uid}"
+        return f"{self._platform_name(platform_id)} · {_short(group_openid, 8, 4)}"
 
     def _global_value(self, key: str, default: Any = None) -> Any:
         try:
@@ -650,8 +665,10 @@ class DashboardAPI:
                 {
                     "id": pending_id,
                     "group_umo": umo,
-                    "group_label": f"{self._platform_name(platform_id)} · "
-                    f"{_short(group_openid, 8, 4)}",
+                    "group_label": self._group_label(platform_id, group_openid),
+                    "group_name": self.plugin.storage.group_name(umo),
+                    "group_uid": self.plugin.storage.group_uid(umo),
+                    "group_note": self.plugin.storage.group_note(umo),
                     "platform_id": platform_id,
                     "platform_name": self._platform_name(platform_id),
                     "nickname": str(item.get("username") or "未提供昵称")[:80],
@@ -727,8 +744,10 @@ class DashboardAPI:
                 {
                     "id": token,
                     "group_umo": umo,
-                    "group_label": f"{self._platform_name(platform_id)} · "
-                    f"{_short(group_openid, 8, 4)}",
+                    "group_label": self._group_label(platform_id, group_openid),
+                    "group_name": self.plugin.storage.group_name(umo),
+                    "group_uid": self.plugin.storage.group_uid(umo),
+                    "group_note": self.plugin.storage.group_note(umo),
                     "platform_id": platform_id,
                     "platform_name": self._platform_name(platform_id),
                     "member_openid": member_openid,
@@ -1521,8 +1540,18 @@ class DashboardAPI:
                 raise DashboardError("QQ 接口响应超时，请稍后刷新确认", 504) from exc
             except Exception as exc:
                 logger.exception("[%s] WebUI 审批入群申请失败", PLUGIN_NAME)
+                text = str(exc).lower()
+                if any(
+                    marker in text
+                    for marker in ("already", "processed", "not found", "不存在")
+                ):
+                    raise DashboardError(
+                        "该申请可能已被其他管理员处理，请刷新后确认",
+                        status_code=409,
+                    ) from exc
                 raise DashboardError(
-                    "QQ 接口调用失败，请查看 AstrBot 日志确认申请状态",
+                    "QQ 接口调用失败，请查看 AstrBot 日志确认申请状态\n"
+                    "该申请可能已被其他管理员处理，请刷新确认后删除记录",
                     status_code=502,
                 ) from exc
             finally:
@@ -1539,6 +1568,26 @@ class DashboardAPI:
             )
         except Exception as exc:
             return self._error(exc, "审批入群申请失败")
+
+    async def delete_pending(self) -> Any:
+        try:
+            payload = await request.json(default={})
+            if not isinstance(payload, dict):
+                raise DashboardError("请求体格式不正确")
+            pending_id = str(payload.get("id") or "").strip()
+            matched = self._find_pending(pending_id)
+            if matched is None:
+                raise DashboardError("该申请不存在或已被处理", status_code=404)
+            key, _ = matched
+            self.plugin.storage.remove_pending(key)
+            return json_response(
+                {
+                    "ok": True,
+                    "message": "已删除后台待审记录，QQ 群里的入群申请不受影响",
+                }
+            )
+        except Exception as exc:
+            return self._error(exc, "删除待审记录失败")
 
     # ------------------------------------------------------------------
     # Handler: 进群验证
