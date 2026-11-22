@@ -6,12 +6,10 @@ from urllib.parse import quote
 WORD_LISTS = {
     "进群白词": "join_whitelist_words",
     "进群黑词": "join_blacklist_words",
-    "违禁词": "mute_keywords",
 }
 KEYWORD_VALUES = {
     "进群匹配模式": "join_keyword_match_mode",
     "白黑词优先级": "join_keyword_priority",
-    "违禁词时长": "keyword_mute_duration",
     "验证模式": "verify_mode",
 }
 
@@ -30,7 +28,7 @@ def keyword_summary(values: dict) -> str:
         "",
         "## 关键词内容",
         "",
-        f"进群白词、黑词：{escape(mode)}；消息违禁词：包含匹配。",
+        f"进群白词、黑词：{escape(mode)}。",
         link(
             "切换进群匹配模式",
             "群管功能 进群匹配模式 设置 "
@@ -63,12 +61,6 @@ def keyword_summary(values: dict) -> str:
                 else "黑词优先"
             ),
         )
-    )
-    lines.append(
-        "违禁词时长："
-        + escape(values["keyword_mute_duration"])
-        + " · "
-        + link("修改", "群管功能 违禁词时长 设置 ")
     )
     lines.append(
         "\n> 链接只填入指令；添加、修改时补全内容再发送。支持含空格的完整词条。"

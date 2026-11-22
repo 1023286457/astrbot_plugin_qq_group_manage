@@ -15,7 +15,7 @@ PANEL_IMAGE_KEYS = {
     "help": "获取帮助",
 }
 PANEL_BUTTON_RE = re.compile(
-    r"^qqpanel:(features|guide|help|manage|group_help|status|audit|verify|noop)(?::(on|off))?$"
+    r"^qqpanel:(features|guide|help|manage|group_help|status|audit|verify|keyword|qr|link|noop)(?::(on|off))?$"
 )
 PANEL_IMAGE_MAX_BYTES = 5 * 1024 * 1024
 _MIME_SUFFIX = {"image/png": ".png", "image/jpeg": ".jpg", "image/jpg": ".jpg"}
@@ -79,31 +79,25 @@ def main_keyboard() -> dict[str, Any]:
 
 
 def manage_keyboard(group_openid: str) -> dict[str, Any]:
+    # QQ 键盘最多 5 行；把功能名和开/关放在同一行，保留 5 个功能。
+    sections = (
+        ("审核申请", "audit"),
+        ("人机验证", "verify"),
+        ("违禁词撤回", "keyword"),
+        ("二维码撤回", "qr"),
+        ("链接撤回", "link"),
+    )
     return {
         "content": {
             "rows": [
                 {
                     "buttons": [
-                        _button("入群审核申请", "qqpanel:noop", label_like=True),
+                        _button(label, "qqpanel:noop", label_like=True),
+                        _button("开", f"qqpanel:{action}:on", admin_only=True),
+                        _button("关", f"qqpanel:{action}:off", admin_only=True),
                     ]
-                },
-                {
-                    "buttons": [
-                        _button("开", "qqpanel:audit:on", admin_only=True),
-                        _button("关", "qqpanel:audit:off", admin_only=True),
-                    ]
-                },
-                {
-                    "buttons": [
-                        _button("入群人机验证", "qqpanel:noop", label_like=True),
-                    ]
-                },
-                {
-                    "buttons": [
-                        _button("开", "qqpanel:verify:on", admin_only=True),
-                        _button("关", "qqpanel:verify:off", admin_only=True),
-                    ]
-                },
+                }
+                for label, action in sections
             ]
         }
     }

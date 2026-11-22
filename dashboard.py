@@ -54,7 +54,7 @@ except Exception as exc:  # pragma: no cover - 仅在旧的 AstrBot 上触发
 
 PLUGIN_NAME = "astrbot_plugin_qq_group_manage"
 PLUGIN_DISPLAY_NAME = "QQ官机群管"
-PLUGIN_VERSION = "3.1.3"
+PLUGIN_VERSION = "3.1.4"
 GITHUB_RELEASE_API = (
     "https://api.github.com/repos/1023286457/"
     "astrbot_plugin_qq_group_manage/releases/latest"
@@ -100,7 +100,6 @@ del _section, _key
 
 DURATION_KEYS = {
     "default_mute_duration",
-    "keyword_mute_duration",
     "verify_fail_mute_duration",
     "spam_mute_duration",
 }
@@ -135,6 +134,8 @@ SPAM_KEYS = (
     "spam_recall_threshold",
 )
 RECALL_KEYS = (
+    "enable_keyword_recall",
+    "keyword_recall_notice",
     "enable_link_recall",
     "link_recall_notice",
     "enable_qr_recall",
@@ -205,6 +206,7 @@ class DashboardAPI:
         self.plugin = plugin
         self.context = plugin.context
         self._broadcast_lock = asyncio.Lock()
+        self._bot_state_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 
     # ------------------------------------------------------------------
     # 路由注册
@@ -235,6 +237,12 @@ class DashboardAPI:
             ("pending", self.get_pending, ["GET"], "待审批入群申请"),
             ("pending/review", self.review_pending, ["POST"], "审批入群申请"),
             ("pending/delete", self.delete_pending, ["POST"], "删除本地待审记录"),
+            (
+                "pending/delete_all",
+                self.delete_all_pending,
+                ["POST"],
+                "一键删除全部本地待审记录",
+            ),
             ("verifications", self.get_verifications, ["GET"], "进群验证队列"),
             (
                 "verifications/release",
@@ -262,6 +270,12 @@ class DashboardAPI:
             ("groups/names", self.fetch_all_group_names, ["POST"], "批量获取 QQ 群名称"),
             ("spam", self.get_spam, ["GET"], "刷屏监控状态"),
             ("recall", self.get_recall, ["GET"], "风险消息撤回状态"),
+            ("lexicons", self.get_lexicons, ["GET"], "词库列表与统计"),
+            ("lexicons/upload", self.upload_lexicon, ["POST"], "上传词库"),
+            ("lexicons/toggle", self.toggle_lexicon, ["POST"], "启用或停用词库"),
+            ("lexicons/delete", self.delete_lexicon, ["POST"], "删除本地词库"),
+            ("lexicons/export", self.export_lexicon, ["GET"], "导出词库"),
+            ("lexicons/test", self.test_lexicon, ["POST"], "命中测试"),
             ("status/overview", self.get_server_status, ["GET"], "服务器运行状态"),
             ("status/history", self.get_server_history, ["GET"], "服务器历史趋势"),
             ("status/events", self.get_server_events, ["GET"], "服务器异常事件"),
@@ -1309,6 +1323,84 @@ class DashboardAPI:
             return self._error(exc, "读取刷屏监控失败")
 
     # ------------------------------------------------------------------
+    # Handler: 词库
+    # ------------------------------------------------------------------
+    async def get_lexicons(self) -> Any:
+        try:
+            return json_response(self.plugin.lexicons.list_payload())
+        except Exception as exc:
+            return self._error(exc, "读取词库失败")
+
+    async def upload_lexicon(self) -> Any:
+        try:
+            payload = await request.json(default={})
+            if not isinstance(payload, dict):
+                raise DashboardError("请求体格式不正确")
+            content = str(payload.get("content") or "")
+            if len(content.encode("utf-8")) > 8 * 1024 * 1024:
+                raise DashboardError("词库内容不能超过 8MB")
+            result = self.plugin.lexicons.upload(
+                name=str(payload.get("name") or ""),
+                content=content,
+                mode=str(payload.get("mode") or "new"),
+                target_id=str(payload.get("target_id") or ""),
+                description=str(payload.get("description") or ""),
+            )
+            return json_response(result)
+        except Exception as exc:
+            return self._error(exc, "上传词库失败")
+
+    async def toggle_lexicon(self) -> Any:
+        try:
+            payload = await request.json(default={})
+            lid = str(payload.get("id") or "").strip()
+            if not lid:
+                raise DashboardError("缺少词库 ID")
+            self.plugin.lexicons.toggle(lid, bool(payload.get("enabled")))
+            return json_response(
+                {"ok": True, **self.plugin.lexicons.list_payload()}
+            )
+        except Exception as exc:
+            return self._error(exc, "切换词库失败")
+
+    async def delete_lexicon(self) -> Any:
+        try:
+            payload = await request.json(default={})
+            lid = str(payload.get("id") or "").strip()
+            if lid.startswith("builtin_"):
+                raise DashboardError("内置词库不能删除，只能停用")
+            if not self.plugin.lexicons.delete(lid):
+                raise DashboardError("词库不存在")
+            return json_response(
+                {"ok": True, **self.plugin.lexicons.list_payload()}
+            )
+        except Exception as exc:
+            return self._error(exc, "删除词库失败")
+
+    async def export_lexicon(self) -> Any:
+        try:
+            lid = str(request.query.get("id") or "").strip()
+            content = self.plugin.lexicons.export(lid)
+            return json_response(
+                {"ok": True, "filename": f"{lid or 'lexicon'}.json", "content": content}
+            )
+        except Exception as exc:
+            return self._error(exc, "导出词库失败")
+
+    async def test_lexicon(self) -> Any:
+        try:
+            payload = await request.json(default={})
+            text = str(payload.get("text") or "")
+            if not text.strip():
+                raise DashboardError("请先输入要测试的文字")
+            result = self.plugin.lexicons.test(
+                text, include_disabled=bool(payload.get("include_disabled"))
+            )
+            return json_response(result)
+        except Exception as exc:
+            return self._error(exc, "命中测试失败")
+
+    # ------------------------------------------------------------------
     # Handler: 风险消息撤回
     # ------------------------------------------------------------------
     async def get_recall(self) -> Any:
@@ -1357,7 +1449,8 @@ class DashboardAPI:
                     groups = []
             return json_response(
                 {
-                    "enabled": bool(config.get("enable_link_recall"))
+                    "enabled": bool(config.get("enable_keyword_recall"))
+                    or bool(config.get("enable_link_recall"))
                     or bool(config.get("enable_qr_recall")),
                     "per_group": per_group,
                     "scope": scope,
@@ -1589,6 +1682,22 @@ class DashboardAPI:
         except Exception as exc:
             return self._error(exc, "删除待审记录失败")
 
+    async def delete_all_pending(self) -> Any:
+        try:
+            storage = self.plugin.storage
+            keys = list(storage.data.get("pending", {}).keys())
+            for key in keys:
+                storage.remove_pending(key)
+            return json_response(
+                {
+                    "ok": True,
+                    "deleted": len(keys),
+                    "message": f"已删除 {len(keys)} 条后台待审记录，QQ 群里的入群申请不受影响",
+                }
+            )
+        except Exception as exc:
+            return self._error(exc, "一键删除待审记录失败")
+
     # ------------------------------------------------------------------
     # Handler: 进群验证
     # ------------------------------------------------------------------
@@ -1764,6 +1873,14 @@ class DashboardAPI:
             if item is None:
                 raise DashboardError("该群不在已知列表中", status_code=404)
             summary = self._group_summary(item)
+            summary["joined_at"] = ""
+            summary["bot_role"] = ""
+            state, error = await self._bot_state_for_group(umo)
+            if state:
+                summary["joined_at"] = str(state.get("joined_at") or "")
+                summary["bot_role"] = str(state.get("member_role") or "")
+            if error:
+                summary["bot_state_error"] = error
             return json_response(
                 {
                     "group": summary,
@@ -1772,6 +1889,44 @@ class DashboardAPI:
             )
         except Exception as exc:
             return self._error(exc, "读取群组详情失败")
+
+    async def _bot_state_for_group(
+        self, umo: str
+    ) -> tuple[dict[str, Any], str]:
+        """读取机器人在群内的角色和入群时间；失败时缓存短时间避免刷接口。"""
+        cached = self._bot_state_cache.get(umo)
+        now = time.monotonic()
+        if cached and now - cached[0] < 600:
+            cached_state = cached[1]
+            return cached_state, str(cached_state.get("_error") or "")
+        platform_id, _, group_openid = umo.partition(":GroupMessage:")
+        platform = self._platform(platform_id)
+        if (
+            platform is None
+            or getattr(platform, "client", None) is None
+            or not group_openid
+        ):
+            return {}, "群机器人当前不在线"
+        try:
+            state = await asyncio.wait_for(
+                QQGroupManageAPI(platform.client).get_bot_state(group_openid),
+                3,
+            )
+            if not isinstance(state, dict):
+                raise RuntimeError("bot_state 返回格式不正确")
+            self._bot_state_cache[umo] = (now, state)
+            return state, ""
+        except Exception as exc:
+            detail = str(exc)
+            if "11253" in detail:
+                error = "无权限（11253）"
+            else:
+                error = detail[:160] or "bot_state 查询失败"
+            self._bot_state_cache[umo] = (
+                now - 540,
+                {"_error": error},
+            )
+            return {"_error": error}, error
 
     async def update_group_admins(self) -> Any:
         try:

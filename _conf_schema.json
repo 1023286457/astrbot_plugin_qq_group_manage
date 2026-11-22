@@ -266,35 +266,17 @@
                   "enable_join_keyword_review": true
                 }
               },
-              "enable_keyword_mute": {
-                "description": "启用违禁词自动禁言",
-                "type": "bool",
-                "default": false,
-                "hint": "检查机器人实际收到的 QQ 群消息正文，命中后禁言发送者并停止后续指令和 LLM 处理。成功、失败均不向群里提示，失败仅记日志；不检查引用原文、图片或语音。"
-              },
               "enable_keyword_recall": {
                 "description": "启用违禁词消息撤回",
                 "type": "bool",
                 "default": false,
-                "hint": "与禁言独立，可单独开启或同时执行，复用消息违禁词表。机器人需为群管理员，仅可撤回普通成员 2 分钟内的消息；直接使用当前事件的消息 ID，不保存聊天记录。成功、失败均不向群里提示，失败仅记日志。"
+                "hint": "检查群消息正文，命中「词库」中已启用的词条时自动撤回。机器人需为群管理员，仅可撤回普通成员 2 分钟内的消息；直接使用当前事件的消息 ID，不保存聊天记录。成功、失败均不向群里提示，失败仅记日志。"
               },
-              "mute_keywords": {
-                "description": "消息违禁词",
-                "type": "list",
-                "items": {
-                  "type": "string"
-                },
-                "default": [],
-                "hint": "消息正文包含任一词条即触发已开启的禁言或撤回，留空不处理；这是普通文本词表，不使用正则。"
-              },
-              "keyword_mute_duration": {
-                "description": "违禁词禁言时长",
+              "keyword_recall_notice": {
+                "description": "撤回后发送提醒",
                 "type": "string",
-                "default": "10分",
-                "hint": "支持 30秒、10分、2小时、1天2小时；纯数字按分钟。必须大于 0，且不超过安全限制中的单次最长禁言秒数。",
-                "condition": {
-                  "enable_keyword_mute": true
-                }
+                "default": "",
+                "hint": "违禁词消息撤回成功后发送的文字，留空则不发送。"
               },
               "enable_link_recall": {
                 "description": "撤回链接消息",
@@ -795,35 +777,17 @@
                       "keyword_settings.enable_join_keyword_review": true
                     }
                   },
-                  "enable_keyword_mute": {
-                    "description": "启用违禁词自动禁言",
-                    "type": "bool",
-                    "default": false,
-                    "hint": "检查机器人实际收到的 QQ 群消息正文，命中后禁言发送者并停止后续指令和 LLM 处理。成功、失败均不向群里提示，失败仅记日志；不检查引用原文、图片或语音。"
-                  },
                   "enable_keyword_recall": {
                     "description": "启用违禁词消息撤回",
                     "type": "bool",
                     "default": false,
-                    "hint": "与禁言独立，可单独开启或同时执行，复用消息违禁词表。机器人需为群管理员，仅可撤回普通成员 2 分钟内的消息；直接使用当前事件的消息 ID，不保存聊天记录。成功、失败均不向群里提示，失败仅记日志。"
+                    "hint": "检查群消息正文，命中「词库」中已启用的词条时自动撤回。机器人需为群管理员，仅可撤回普通成员 2 分钟内的消息；直接使用当前事件的消息 ID，不保存聊天记录。成功、失败均不向群里提示，失败仅记日志。"
                   },
-                  "mute_keywords": {
-                    "description": "消息违禁词",
-                    "type": "list",
-                    "items": {
-                      "type": "string"
-                    },
-                    "default": [],
-                    "hint": "消息正文包含任一词条即触发已开启的禁言或撤回，留空不处理；这是普通文本词表，不使用正则。"
-                  },
-                  "keyword_mute_duration": {
-                    "description": "违禁词禁言时长",
+                  "keyword_recall_notice": {
+                    "description": "撤回后发送提醒",
                     "type": "string",
-                    "default": "10分",
-                    "hint": "支持 30秒、10分、2小时、1天2小时；纯数字按分钟。必须大于 0，且不超过安全限制中的单次最长禁言秒数。",
-                    "condition": {
-                      "keyword_settings.enable_keyword_mute": true
-                    }
+                    "default": "",
+                    "hint": "违禁词消息撤回成功后发送的文字，留空则不发送。"
                   },
                   "enable_link_recall": {
                     "description": "撤回链接消息",
@@ -1281,32 +1245,17 @@
         "default": "黑词优先",
         "hint": "黑词优先：同时命中则拒绝；白词优先：同时命中则同意。不同回答分别命中白词和黑词也按此规则处理。"
       },
-      "enable_keyword_mute": {
-        "description": "启用违禁词自动禁言",
-        "type": "bool",
-        "default": false,
-        "hint": "检查机器人实际收到的 QQ 群消息正文，命中后禁言发送者并停止后续指令和 LLM 处理。成功、失败均不向群里提示，失败仅记日志；不检查引用原文、图片或语音。"
-      },
       "enable_keyword_recall": {
         "description": "启用违禁词消息撤回",
         "type": "bool",
         "default": false,
-        "hint": "与禁言独立，可单独开启或同时执行，复用消息违禁词表。机器人需为群管理员，仅可撤回普通成员 2 分钟内的消息；直接使用当前事件的消息 ID，不保存聊天记录。成功、失败均不向群里提示，失败仅记日志。"
+        "hint": "检查群消息正文，命中「词库」中已启用的词条时自动撤回。机器人需为群管理员，仅可撤回普通成员 2 分钟内的消息；直接使用当前事件的消息 ID，不保存聊天记录。成功、失败均不向群里提示，失败仅记日志。"
       },
-      "mute_keywords": {
-        "description": "消息违禁词",
-        "type": "list",
-        "items": {
-          "type": "string"
-        },
-        "default": [],
-        "hint": "消息正文包含任一词条即触发已开启的禁言或撤回，留空不处理；这是普通文本词表，不使用正则。"
-      },
-      "keyword_mute_duration": {
-        "description": "违禁词禁言时长",
+      "keyword_recall_notice": {
+        "description": "撤回后发送提醒",
         "type": "string",
-        "default": "10分",
-        "hint": "支持 30秒、10分、2小时、1天2小时；纯数字按分钟。必须大于 0，且不超过安全限制中的单次最长禁言秒数。"
+        "default": "",
+        "hint": "违禁词消息撤回成功后发送的文字，留空则不发送。"
       },
       "enable_link_recall": {
         "description": "撤回链接消息",

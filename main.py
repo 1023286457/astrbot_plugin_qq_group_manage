@@ -26,6 +26,7 @@ from .durations import parse_duration
 from .storage import PluginStorage
 from .group_config import GroupConfig
 from .keyword_rules import JOIN_REGEX_KEYS, compile_join_pattern, match_join_rules
+from .lexicon_store import LexiconStore
 from .join_verify import VERIFY_MODES
 from .panel import (
     PANEL_IMAGE_KEYS,
@@ -147,15 +148,14 @@ FEATURES = (
     FeatureDefinition(
         "入群关键词审批", "enable_join_keyword_review", "关键词管理", default=False
     ),
-    FeatureDefinition("违禁词禁言", "enable_keyword_mute", "关键词管理", default=False),
     FeatureDefinition(
-        "违禁词撤回", "enable_keyword_recall", "关键词管理", default=False
+        "违禁词撤回", "enable_keyword_recall", "风险消息撤回", default=False
     ),
     FeatureDefinition(
-        "链接消息撤回", "enable_link_recall", "关键词管理", default=False
+        "链接消息撤回", "enable_link_recall", "风险消息撤回", default=False
     ),
     FeatureDefinition(
-        "二维码图片撤回", "enable_qr_recall", "关键词管理", default=False
+        "二维码图片撤回", "enable_qr_recall", "风险消息撤回", default=False
     ),
     FeatureDefinition("进群验证", "enable_join_verify", "进群验证", default=False),
     FeatureDefinition("刷屏监控", "enable_anti_spam", "刷屏监控", default=False),
@@ -197,10 +197,8 @@ CONFIG_SECTIONS = {
     "join_blacklist_words": "keyword_settings",
     "join_keyword_priority": "keyword_settings",
     "join_keyword_match_mode": "keyword_settings",
-    "enable_keyword_mute": "keyword_settings",
     "enable_keyword_recall": "keyword_settings",
-    "mute_keywords": "keyword_settings",
-    "keyword_mute_duration": "keyword_settings",
+    "keyword_recall_notice": "keyword_settings",
     "enable_link_recall": "keyword_settings",
     "link_recall_notice": "keyword_settings",
     "enable_qr_recall": "keyword_settings",
@@ -229,6 +227,9 @@ PANEL_FEATURE_KEYS = {
     "enable_join_notice",
     "enable_join_reply_review",
     "enable_join_verify",
+    "enable_keyword_recall",
+    "enable_qr_recall",
+    "enable_link_recall",
 }
 
 LEGACY_CONFIG_KEYS = tuple(
@@ -457,7 +458,7 @@ def format_group_admin_help(default_duration: str) -> str:
         "> `解禁 @用户`  \n"
         "> 解除成员禁言\n\n"
         "> `踢人 @用户`  \n"
-        "> 批量移出群成员；内测接口，单次最多 20 人\n\n"
+        "> 批量移出群成员；单次最多 20 人\n\n"
         "> `禁言状态`  \n"
         "> 查看全员禁言规则及被禁言成员\n\n"
         "## 群管管理\n\n"
@@ -557,7 +558,7 @@ def review_quote(event: AstrMessageEvent) -> set[str] | None:
     PLUGIN_NAME,
     "简单么么熊",
     "QQ 官方机器人群管理：禁言、入群申请审批、分群管理员与 LLM 工具",
-    "3.1.3",
+    "3.1.4",
 )
 class QQGroupAdminPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig) -> None:
@@ -584,6 +585,7 @@ class QQGroupAdminPlugin(Star):
         self._callback_guard = ReviewCallbackGuard()
         self.spam_monitor = SpamMonitor()
         self.recall_monitor = RecallMonitor()
+        self.lexicons = LexiconStore(data_dir)
         self.server_status = ServerStatusService(data_dir, self)
         self.verifier = JoinVerifier(self)
         self._verify_task: asyncio.Task | None = None
@@ -1269,7 +1271,10 @@ class QQGroupAdminPlugin(Star):
             await acknowledge(0)
             await self._send_panel_image(api, group, action, event_id)
             return True
-        if action in {"audit", "verify"} and value in {"on", "off"}:
+        if action in {"audit", "verify", "keyword", "qr", "link"} and value in {
+            "on",
+            "off",
+        }:
             allowed = await self.verifier._admin_role_ok(api, group, sender)
             if allowed is False:
                 await acknowledge(5)
@@ -1289,8 +1294,15 @@ class QQGroupAdminPlugin(Star):
             if action == "audit":
                 self._set_feature_for_umo(umo, "enable_join_notice", enabled)
                 self._set_feature_for_umo(umo, "enable_join_reply_review", enabled)
-            else:
+            elif action == "verify":
                 self._set_feature_for_umo(umo, "enable_join_verify", enabled)
+            else:
+                feature = {
+                    "keyword": "enable_keyword_recall",
+                    "qr": "enable_qr_recall",
+                    "link": "enable_link_recall",
+                }[action]
+                self._set_feature_for_umo(umo, feature, enabled)
             await acknowledge(0)
             await self._send_manage_panel(platform_id, api, group, event_id)
             return True
@@ -1478,15 +1490,21 @@ class QQGroupAdminPlugin(Star):
         umo = self._group_umo(platform_id, group)
         audit = bool(self._group_setting("enable_join_reply_review", umo, False))
         verify = bool(self._group_setting("enable_join_verify", umo, False))
+        keyword = bool(self._group_setting("enable_keyword_recall", umo, False))
+        qr = bool(self._group_setting("enable_qr_recall", umo, False))
+        link = bool(self._group_setting("enable_link_recall", umo, False))
         try:
             group_uid = self.storage.ensure_group_uid(umo)
         except Exception:
             logger.exception("[%s] 分配群 UID 失败", PLUGIN_NAME)
             group_uid = ""
         content = (
-            "群管面板\n"
+            "🧰群管面板🧰\n"
             f"入群审核申请：{'已开启' if audit else '已关闭'}\n"
             f"入群人机验证：{'已开启' if verify else '已关闭'}\n"
+            f"违禁词撤回：{'已开启' if keyword else '已关闭'}\n"
+            f"二维码撤回：{'已开启' if qr else '已关闭'}\n"
+            f"链接撤回：{'已开启' if link else '已关闭'}\n"
             f"群聊UID：{group_uid or group}"
         )
         try:
@@ -1720,11 +1738,10 @@ class QQGroupAdminPlugin(Star):
     async def keyword_mute(self, event: AstrMessageEvent) -> None:
         if not self._is_qq_group(event):
             return
-        mute_enabled = self._event_feature_setting(event, "enable_keyword_mute", False)
         recall_enabled = self._event_feature_setting(
             event, "enable_keyword_recall", False
         )
-        if not mute_enabled and not recall_enabled:
+        if not recall_enabled:
             return
         sender = event.get_sender_id()
         if not sender or sender == event.get_self_id():
@@ -1734,11 +1751,11 @@ class QQGroupAdminPlugin(Star):
             and re.match(r"^群管功能(?:\s|$)", event.get_message_str().strip())
             and self._can_manage(event)
         ):
-            return  # Let authorized users edit the word list without punishing its contents.
+            return
         text = "".join(
             part.text for part in event.get_messages() if isinstance(part, Plain)
         )
-        if not contains_keyword(text, self._event_setting(event, "mute_keywords", [])):
+        if not self.lexicons.match(text):
             return
         if not await self._sdk_group_enabled(self._event_group_umo(event)):
             return
@@ -1756,34 +1773,34 @@ class QQGroupAdminPlugin(Star):
             # Only a real, authorized review takes precedence over the word filter.
             await self.reply_review(event)
             return
-        # Consume matched messages even if QQ rejects the mute, keeping commands/LLM silent.
         event.stop_event()
-        if recall_enabled:
-            try:
-                # Never use a quoted message ID or a session's last message ID.
-                message_id = getattr(event.message_obj, "message_id", "")
-                if not message_id:
-                    raise ValueError("当前消息缺少消息 ID，无法撤回")
-                await asyncio.wait_for(
-                    QQGroupManageAPI(self._platform(event).client).recall_group_message(
-                        event.get_group_id(), str(message_id)
-                    ),
-                    timeout=10,
-                )
-            except Exception:
-                logger.exception("[%s] 违禁词消息撤回失败", PLUGIN_NAME)
-        if not mute_enabled:
+        message_id = getattr(event.message_obj, "message_id", "")
+        try:
+            # Never use a quoted message ID or a session's last message ID.
+            if not message_id:
+                raise ValueError("当前消息缺少消息 ID，无法撤回")
+            api = QQGroupManageAPI(self._platform(event).client)
+            await asyncio.wait_for(
+                api.recall_group_message(event.get_group_id(), str(message_id)),
+                timeout=10,
+            )
+        except Exception:
+            logger.exception("[%s] 违禁词消息撤回失败", PLUGIN_NAME)
+            return
+        notice = str(
+            self._event_setting(event, "keyword_recall_notice", "") or ""
+        ).strip()
+        if not notice:
             return
         try:
-            seconds = parse_duration(
-                str(self._event_setting(event, "keyword_mute_duration", "10分"))
+            await asyncio.wait_for(
+                api.send_group_text(
+                    event.get_group_id(), notice, msg_id=str(message_id)
+                ),
+                timeout=10,
             )
-            self._validate_duration(seconds, self._event_group_umo(event))
-            if seconds == 0:
-                raise ValueError("违禁词禁言时长必须大于 0")
-            await self._mute(event, event.get_group_id(), sender, seconds)
         except Exception:
-            logger.exception("[%s] 违禁词自动禁言失败", PLUGIN_NAME)
+            logger.exception("[%s] 违禁词撤回提醒发送失败", PLUGIN_NAME)
 
     @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE, priority=150)
     async def link_recall(self, event: AstrMessageEvent) -> None:
@@ -2094,7 +2111,7 @@ class QQGroupAdminPlugin(Star):
 
     @filter.command("踢人")
     async def kick_members_command(self, event: AstrMessageEvent) -> None:
-        """批量移出被艾特的群成员（QQ 官方内测接口，单次最多 20 人）。"""
+        """批量移出被艾特的群成员（QQ 官方接口，单次最多 20 人）。"""
         if not self._is_qq_group(event):
             yield event.plain_result("该指令仅支持 QQ 官方机器人群聊。")
             return
@@ -2128,7 +2145,7 @@ class QQGroupAdminPlugin(Star):
             detail = str(exc)
             if "11253" in detail:
                 yield event.plain_result(
-                    "踢人失败：QQ 未开放批量移出成员接口权限（11253，内测白名单）。"
+                    "踢人失败：QQ 接口无访问权限（11253），请确认机器人有群成员移除权限。"
                 )
             else:
                 yield event.plain_result(f"踢人失败：{detail[:200]}")
@@ -2653,9 +2670,6 @@ class QQGroupAdminPlugin(Star):
                     "join_keyword_match_mode": self._event_setting(
                         event, "join_keyword_match_mode", "包含匹配"
                     ),
-                    "keyword_mute_duration": self._event_setting(
-                        event, "keyword_mute_duration", "10分"
-                    ),
                 }
             )
             + verify_summary(self._event_setting(event, "verify_mode", "算术题"))
@@ -2730,11 +2744,6 @@ class QQGroupAdminPlugin(Star):
                     for word in self._event_setting(event, word_key, []):
                         if word.strip():
                             compile_join_pattern(word.strip())
-        else:
-            seconds = parse_duration(value)
-            self._validate_duration(seconds, self._event_group_umo(event))
-            if seconds == 0:
-                raise ValueError("违禁词禁言时长必须大于 0")
         self._save_setting(event, key, value)
         return f"{name}已保存。"
 
@@ -3121,7 +3130,10 @@ class QQGroupAdminPlugin(Star):
         key: str,
         default: bool = True,
     ) -> bool:
-        if not self._config("enable_per_group_feature_settings", False):
+        if (
+            not self._config("enable_per_group_feature_settings", False)
+            and key not in PANEL_FEATURE_KEYS
+        ):
             return bool(self._config(key, default))
         return self._feature_setting(key, self._event_group_umo(event), default)
 

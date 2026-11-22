@@ -8,8 +8,8 @@ const modalRoot = document.getElementById("modal-root");
 const toastRoot = document.getElementById("toast-root");
 
 const PLUGIN_NAME = "astrbot_plugin_qq_group_manage";
-const PLUGIN_VERSION = "3.1.3";
-const TAB_IDS = ["overview", "pending", "verify", "groups", "spam", "settings", "broadcast", "data"];
+const PLUGIN_VERSION = "3.1.4";
+const TAB_IDS = ["overview", "pending", "verify", "groups", "spam", "settings", "broadcast", "data", "lexicon"];
 
 const TABS = [
   { id: "overview", label: "总览", short: "总览", icon: "layout-dashboard" },
@@ -20,6 +20,7 @@ const TABS = [
   { id: "settings", label: "配置", short: "配置", icon: "settings" },
   { id: "broadcast", label: "群广播", short: "广播", icon: "megaphone" },
   { id: "data", label: "数据", short: "数据", icon: "database" },
+  { id: "lexicon", label: "词库", short: "词库", icon: "book-open" },
 ];
 
 const DEFAULT_THEME_COLOR = "#6d5dfc";
@@ -45,6 +46,8 @@ const ICONS = {
     '<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>',
   database:
     '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/>',
+  "book-open":
+    '<path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/>',
   server:
     '<rect x="2" y="3" width="20" height="7" rx="2"/><rect x="2" y="14" width="20" height="7" rx="2"/><path d="M6 6.5h.01M6 17.5h.01"/>',
   "refresh-cw":
@@ -148,6 +151,7 @@ const state = {
   recallGroup: "",
   recallConfig: null,
   recallDirty: false,
+  lexicons: null,
   selectedGroup: "",
   config: null,
   configScope: "global",
@@ -260,6 +264,19 @@ function formatTime(value) {
   if (diff < 60 * 60 * 1000) return `${Math.floor(diff / 60000)} 分钟前`;
   if (diff < 24 * 60 * 60 * 1000) return `${Math.floor(diff / 3600000)} 小时前`;
   return new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function formatJoinTime(value) {
+  if (!value) return "暂无数据";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
@@ -1014,6 +1031,13 @@ async function loadTab(tab) {
     renderSettings();
     return;
   }
+  if (tab === "lexicon") {
+    const data = await apiGet("lexicons");
+    if (seq !== state.requestSeq) return;
+    state.lexicons = data;
+    renderLexicon();
+    return;
+  }
   if (tab === "data") {
     if (!state.overview) {
       const data = await apiGet("overview");
@@ -1674,6 +1698,16 @@ function renderPending() {
       el("div", { class: "search" }, icon("search", 14), search),
       groupSelect,
       iconButton("refresh-cw", "刷新", () => refreshCurrent(true)),
+      button(
+        "一键删除",
+        {
+          className: "btn-ghost btn-sm danger",
+          onClick: () => deleteAllPending(),
+          disabled: !items.length,
+        },
+        icon("trash", 13),
+        el("span", {}, "一键删除"),
+      ),
     ),
     list,
     footer(),
@@ -1865,6 +1899,29 @@ async function deletePending(item) {
     toast(result?.message || "已删除后台待审记录", "success", 5000);
     state.busy.delete(item.id);
     if (state.tab === "pending") await loadTab("pending");
+    await refreshOverviewSilent();
+    syncBadges();
+  } catch (error) {
+    toast(cleanError(error), "error", 5000);
+  }
+}
+
+async function deleteAllPending() {
+  const total = state.pending?.items?.length || 0;
+  if (!total) {
+    toast("当前没有待审记录", "error");
+    return;
+  }
+  const ok = await confirmAction(
+    "一键删除待审记录",
+    `确定删除全部 ${total} 条后台待审记录？只清本地记录，不会同意或拒绝 QQ 群里的入群申请。`,
+    { iconName: "trash", confirmText: "全部删除", danger: true },
+  );
+  if (!ok) return;
+  try {
+    const result = await apiPost("pending/delete_all", {});
+    toast(result?.message || `已删除 ${total} 条待审记录`, "success", 5000);
+    await loadTab("pending");
     await refreshOverviewSilent();
     syncBadges();
   } catch (error) {
@@ -2501,6 +2558,12 @@ function renderGroupDetail() {
         kvRow("群 OpenID", group.group_openid),
         kvRow("UMO", group.umo),
         kvRow("备注", group.note || "未备注"),
+        kvRow(
+          "入群时间",
+          group.joined_at
+            ? formatJoinTime(group.joined_at)
+            : group.bot_state_error || "暂无数据",
+        ),
         kvRow("配置来源", (group.sources || []).join(" / ") || "未知"),
         kvRow("最近活跃", group.last_seen ? formatTime(group.last_seen) : "暂无消息记录"),
         kvRow("白名单", group.whitelisted ? "已包含" : "未包含"),
@@ -2758,6 +2821,8 @@ function spamLimitItem(label, value, hint) {
 }
 
 const RECALL_CONFIG_KEYS = [
+  "enable_keyword_recall",
+  "keyword_recall_notice",
   "enable_link_recall",
   "link_recall_notice",
   "enable_qr_recall",
@@ -3464,6 +3529,30 @@ function renderRiskRecall(target) {
       el(
         "div",
         { class: "field-list" },
+        recallFieldRow(
+          "撤回违禁词",
+          "消息命中「词库」中已启用的违禁词时自动撤回。",
+          recallToggle(
+            "撤回违禁词",
+            Boolean(config.enable_keyword_recall),
+            (value) => {
+              config.enable_keyword_recall = value;
+              state.recallDirty = true;
+            },
+          ),
+        ),
+        recallFieldRow(
+          "撤回后发送提醒",
+          "违禁词消息撤回成功后发送的文字，留空则不发送。",
+          recallTextInput(
+            config.keyword_recall_notice,
+            "留空则不发送提醒",
+            (value) => {
+              config.keyword_recall_notice = value;
+              state.recallDirty = true;
+            },
+          ),
+        ),
         recallFieldRow(
           "撤回链接消息",
           "消息文字中出现网址或域名时自动撤回。",
@@ -4642,6 +4731,474 @@ async function sendBroadcast(totalGroups) {
     if (resultNode) resultNode.textContent = cleanError(error);
     toast(cleanError(error), "error");
   }
+}
+
+/* ------------------------------------------------------------------ */
+/* 词库                                                               */
+/* ------------------------------------------------------------------ */
+
+function lexiconSwitch(item) {
+  return el(
+    "button",
+    {
+      class: "switch",
+      type: "button",
+      role: "switch",
+      "aria-checked": item.enabled ? "true" : "false",
+      "aria-label": `${item.enabled ? "停用" : "启用"}${item.name}`,
+      onclick: async (event) => {
+        const node = event.currentTarget;
+        node.disabled = true;
+        try {
+          const result = await apiPost("lexicons/toggle", {
+            id: item.id,
+            enabled: !item.enabled,
+          });
+          state.lexicons = result;
+          renderLexicon();
+          toast(item.enabled ? "已停用词库" : "已启用词库", "success");
+        } catch (error) {
+          toast(cleanError(error), "error");
+        } finally {
+          node.disabled = false;
+        }
+      },
+    },
+  );
+}
+
+function lexiconRows() {
+  const lexicons = state.lexicons?.lexicons || [];
+  if (!lexicons.length) {
+    return el("p", { class: "muted" }, "还没有词库。");
+  }
+  return el(
+    "div",
+    { class: "lex-table-wrap" },
+    el(
+      "table",
+      { class: "lex-table" },
+      el(
+        "thead",
+        {},
+        el(
+          "tr",
+          {},
+          el("th", {}, "启用"),
+          el("th", {}, "词库"),
+          el("th", {}, "词条数"),
+          el("th", {}, "操作"),
+        ),
+      ),
+      el(
+        "tbody",
+        {},
+        ...lexicons.map((item) =>
+          el(
+            "tr",
+            { class: item.enabled ? "" : "lex-off" },
+            el("td", {}, lexiconSwitch(item)),
+            el(
+              "td",
+              {},
+              el(
+                "div",
+                { class: "lex-name" },
+                item.name,
+                el("span", { class: "lex-tag" }, item.builtin ? "内置" : "本地"),
+                item.regex_count
+                  ? el("span", { class: "lex-tag ok" }, `正则 ${item.regex_count}`)
+                  : null,
+              ),
+              el("div", { class: "lex-desc" }, item.description || "（无说明）"),
+            ),
+            el(
+              "td",
+              {},
+              String(item.count),
+              el(
+                "div",
+                { class: "lex-desc" },
+                `字面量 ${item.literal_count}${
+                  item.regex_count ? ` · 正则 ${item.regex_count}` : ""
+                }`,
+              ),
+            ),
+            el(
+              "td",
+              { class: "lex-actions" },
+              el(
+                "button",
+                {
+                  class: "btn btn-ghost btn-sm",
+                  type: "button",
+                  onclick: () => lexiconExport(item),
+                },
+                "导出",
+              ),
+              item.builtin
+                ? null
+                : el(
+                    "button",
+                    {
+                      class: "btn btn-ghost btn-sm danger",
+                      type: "button",
+                      onclick: () => lexiconDelete(item),
+                    },
+                    "删除",
+                  ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+async function lexiconExport(item) {
+  try {
+    const result = await apiGet("lexicons/export", { id: item.id });
+    const blob = new Blob([result.content || ""], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = result.filename || `${item.id}.json`;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 3000);
+    toast("已导出词库", "success");
+  } catch (error) {
+    toast(cleanError(error), "error");
+  }
+}
+
+async function lexiconDelete(item) {
+  const confirmed = await confirmAction(
+    "删除词库",
+    `确定删除「${item.name}」？其中的 ${item.count} 条词条会一起删除。`,
+    { confirmText: "删除", danger: true },
+  );
+  if (!confirmed) return;
+  try {
+    const result = await apiPost("lexicons/delete", { id: item.id });
+    state.lexicons = result;
+    renderLexicon();
+    toast("已删除词库", "success");
+  } catch (error) {
+    toast(cleanError(error), "error");
+  }
+}
+
+function lexiconUploadCard() {
+  const file = el("input", { type: "file", accept: ".txt,.csv,.json" });
+  const name = el("input", {
+    placeholder: "词库名称，例如：本群广告词",
+    maxlength: 40,
+  });
+  const mode = el(
+    "select",
+    {},
+    el("option", { value: "new" }, "新建词库"),
+    el("option", { value: "append" }, "追加到已有本地词库"),
+  );
+  const target = el(
+    "select",
+    {},
+    ...(state.lexicons?.lexicons || [])
+      .filter((item) => !item.builtin)
+      .map((item) => el("option", { value: item.id }, item.name)),
+  );
+  if (!target.children.length) target.append(el("option", { value: "" }, "暂无本地词库"));
+  const textarea = el("textarea", {
+    rows: 6,
+    placeholder: "一行一条；支持 TXT / CSV / JSON；以 # 或 // 开头的行会忽略。",
+  });
+  const msg = el("span", { class: "lex-upload-msg" });
+  const targetRow = el(
+    "label",
+    { class: "lex-field", hidden: true },
+    el("span", {}, "追加到"),
+    target,
+  );
+  mode.addEventListener("change", () => {
+    targetRow.hidden = mode.value !== "append";
+  });
+  const upload = el(
+    "button",
+    {
+      class: "btn btn-primary btn-sm",
+      type: "button",
+      onclick: async (event) => {
+        const button = event.currentTarget;
+        let content = textarea.value;
+        if (!content.trim() && file.files?.[0]) {
+          content = await file.files[0].text();
+        }
+        if (!content.trim()) {
+          msg.textContent = "先选择文件或粘贴词条。";
+          return;
+        }
+        button.disabled = true;
+        msg.textContent = "上传中…";
+        try {
+          const result = await apiPost("lexicons/upload", {
+            name: name.value.trim(),
+            content,
+            mode: mode.value,
+            target_id: mode.value === "append" ? target.value : "",
+          });
+          msg.textContent = `已写入「${result.name}」：${result.count} 条`;
+          toast(`已上传 ${result.count} 条词条`, "success");
+          await loadTab("lexicon");
+        } catch (error) {
+          msg.textContent = cleanError(error);
+          toast(cleanError(error), "error");
+        } finally {
+          button.disabled = false;
+        }
+      },
+    },
+    "上传并启用",
+  );
+  const parse = el(
+    "button",
+    {
+      class: "btn btn-ghost btn-sm",
+      type: "button",
+      onclick: async () => {
+        let content = textarea.value;
+        if (!content.trim() && file.files?.[0]) content = await file.files[0].text();
+        const lines = content
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter((line) => line && !line.startsWith("#") && !line.startsWith("//"));
+        msg.textContent = content.trim()
+          ? `当前内容约 ${lines.length} 行，上传后由服务端解析去重。`
+          : "先选择文件或粘贴词条。";
+      },
+    },
+    "查看能解析多少条",
+  );
+  return el(
+    "section",
+    { class: "card" },
+    el(
+      "div",
+      { class: "card-head" },
+      el("div", { class: "card-heading" }, icon("upload", 16), el("h2", {}, "上传词库")),
+    ),
+    el(
+      "div",
+      { class: "card-body lex-upload" },
+      el(
+        "div",
+        { class: "lex-upload-grid" },
+        el("label", { class: "lex-field" }, el("span", {}, "选择文件"), file),
+        el("label", { class: "lex-field" }, el("span", {}, "词库名称"), name),
+        el("label", { class: "lex-field" }, el("span", {}, "导入方式"), mode),
+      ),
+      targetRow,
+      textarea,
+      el("div", { class: "lex-upload-actions" }, parse, upload, msg),
+    ),
+  );
+}
+
+function lexiconTestCard() {
+  const input = el("textarea", {
+    rows: 3,
+    placeholder: "粘贴一条群消息，例如：加我vx：abc123 进群领福利",
+  });
+  const includeDisabled = el("input", { type: "checkbox" });
+  const result = el("div", { class: "lex-test-result" });
+  const run = el(
+    "button",
+    {
+      class: "btn btn-primary btn-sm",
+      type: "button",
+      onclick: async (event) => {
+        const text = input.value.trim();
+        if (!text) {
+          toast("先输入要测试的文字", "error");
+          return;
+        }
+        const button = event.currentTarget;
+        button.disabled = true;
+        result.replaceChildren(el("p", { class: "muted" }, "测试中…"));
+        try {
+          const data = await apiPost("lexicons/test", {
+            text,
+            include_disabled: includeDisabled.checked,
+          });
+          if (!data.count) {
+            result.replaceChildren(
+              el("p", { class: "lex-test-ok" }, "没有命中任何词库规则。"),
+            );
+            return;
+          }
+          result.replaceChildren(
+            el("p", { class: "lex-test-summary" }, `命中 ${data.count} 条规则`),
+            el(
+              "div",
+              { class: "lex-table-wrap" },
+              el(
+                "table",
+                { class: "lex-table" },
+                el(
+                  "thead",
+                  {},
+                  el(
+                    "tr",
+                    {},
+                    el("th", {}, "词库"),
+                    el("th", {}, "类型"),
+                    el("th", {}, "词长"),
+                    el("th", {}, "位置"),
+                  ),
+                ),
+                el(
+                  "tbody",
+                  {},
+                  ...(data.hits || []).map((hit) =>
+                    el(
+                      "tr",
+                      {},
+                      el("td", {}, hit.lexicon),
+                      el(
+                        "td",
+                        {},
+                        hit.kind === "regex" ? "正则规则" : "字面量",
+                      ),
+                      el("td", {}, `${hit.length} 字`),
+                      el("td", {}, `${hit.start}~${hit.end}`),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            el(
+              "p",
+              { class: "lex-test-hint" },
+              "为保护词库内容，命中词本身不在页面展示。",
+            ),
+          );
+        } catch (error) {
+          result.replaceChildren(
+            el("p", { class: "lex-test-error" }, cleanError(error)),
+          );
+        } finally {
+          button.disabled = false;
+        }
+      },
+    },
+    "测试命中",
+  );
+  return el(
+    "section",
+    { class: "card" },
+    el(
+      "div",
+      { class: "card-head" },
+      el(
+        "div",
+        { class: "card-heading" },
+        icon("search", 16),
+        el("h2", {}, "命中测试"),
+      ),
+      el("span", { class: "muted" }, "检查一段文字会被哪些词库命中"),
+    ),
+    el(
+      "div",
+      { class: "card-body lex-test" },
+      input,
+      el(
+        "div",
+        { class: "lex-test-actions" },
+        el(
+          "label",
+          { class: "lex-test-check" },
+          includeDisabled,
+          el("span", {}, "包含已停用的词库"),
+        ),
+        run,
+      ),
+      result,
+    ),
+  );
+}
+
+function renderLexicon() {
+  const page = document.getElementById("page");
+  if (!page) return;
+  const data = state.lexicons || {};
+  const stats = data.stats || {};
+  const statItems = [
+    ["启用词库", `${stats.enabled_count || 0} / ${stats.lexicon_count || 0}`],
+    ["生效词条", String(stats.pattern_count || 0)],
+    ["其中字面量", String(stats.literal_count || 0)],
+    ["其中正则", String(stats.regex_count || 0)],
+    ["白名单", String(stats.allow_count || 0)],
+    ["解析告警", String((stats.error_count || 0) + (stats.warning_count || 0))],
+  ];
+  page.replaceChildren(
+    el(
+      "div",
+      { class: "lex-head" },
+      el(
+        "div",
+        {},
+        el("h2", { class: "card-title" }, "词库"),
+        el("p", { class: "card-subtitle" }, "管理违禁词库，启用的词条会参与违禁词撤回。"),
+      ),
+      el(
+        "div",
+        { class: "lex-head-actions" },
+        el(
+          "button",
+          {
+            class: "btn btn-ghost btn-sm",
+            type: "button",
+            onclick: async () => {
+              await loadTab("lexicon");
+              toast("已刷新词库", "success");
+            },
+          },
+          icon("refresh-cw", 13),
+          "刷新",
+        ),
+      ),
+    ),
+    el(
+      "div",
+      { class: "lex-stats" },
+      ...statItems.map(([label, value]) =>
+        el("div", { class: "lex-stat" }, el("strong", {}, value), el("span", {}, label)),
+      ),
+    ),
+    el(
+      "div",
+      { class: "lex-sections" },
+      el(
+        "section",
+        { class: "card" },
+        el(
+          "div",
+          { class: "card-head" },
+          el(
+            "div",
+            { class: "card-heading" },
+            icon("book-open", 16),
+            el("h2", {}, "词库列表"),
+          ),
+          el("span", { class: "muted" }, `共 ${stats.lexicon_count || 0} 个`),
+        ),
+        el("div", { class: "card-body lex-list" }, lexiconRows()),
+      ),
+      lexiconUploadCard(),
+      lexiconTestCard(),
+    ),
+  );
 }
 
 /* ------------------------------------------------------------------ */

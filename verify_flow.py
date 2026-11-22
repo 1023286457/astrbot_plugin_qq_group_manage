@@ -182,9 +182,32 @@ class JoinVerifier:
         except Exception:
             logger.warning("[进群验证] Markdown 题目发送失败，降级为普通文本", exc_info=True)
         if buttons:
-            # 没有按钮可点时改为直接发送答案数字。
-            record["text_answer"] = True
-            self.storage.put_verification(record)
+            # Markdown 不可用时先尝试“普通文本 + 键盘”，尽量保留按钮作答。
+            try:
+                await asyncio.wait_for(
+                    api.send_group_text(
+                        group,
+                        render_prompt(
+                            template,
+                            member,
+                            question_text(record),
+                            self._rules(umo),
+                            markdown=False,
+                        ),
+                        event_id=event_id,
+                        keyboard=verify_keyboard(
+                            record["token"], member, record["options"]
+                        ),
+                    ),
+                    API_TIMEOUT,
+                )
+                return True
+            except Exception:
+                logger.warning(
+                    "[进群验证] 普通文本键盘发送失败，改为文字作答", exc_info=True
+                )
+                record["text_answer"] = True
+                self.storage.put_verification(record)
         try:
             await asyncio.wait_for(
                 api.send_group_text(
