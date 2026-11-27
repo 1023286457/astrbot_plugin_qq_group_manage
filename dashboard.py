@@ -9,11 +9,14 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import csv
 import hashlib
 import hmac
+import io
 import json
 import re
 import time
+import zipfile
 from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any
@@ -54,7 +57,7 @@ except Exception as exc:  # pragma: no cover - 仅在旧的 AstrBot 上触发
 
 PLUGIN_NAME = "astrbot_plugin_qq_group_manage"
 PLUGIN_DISPLAY_NAME = "QQ官机群管"
-PLUGIN_VERSION = "3.1.4"
+PLUGIN_VERSION = "3.1.5"
 GITHUB_RELEASE_API = (
     "https://api.github.com/repos/1023286457/"
     "astrbot_plugin_qq_group_manage/releases/latest"
@@ -263,6 +266,7 @@ class DashboardAPI:
                 "重新发起进群验证",
             ),
             ("groups", self.get_groups, ["GET"], "群组列表"),
+            ("groups/import", self.import_groups, ["POST"], "导入 QQ 官方群组列表"),
             ("groups/detail", self.get_group_detail, ["GET"], "群组详情"),
             ("groups/admins", self.update_group_admins, ["POST"], "维护群管名单"),
             ("groups/note", self.update_group_note, ["POST"], "保存群备注"),
@@ -372,6 +376,57 @@ class DashboardAPI:
                 continue
         return None
 
+    def _is_qq_platform(self, platform_id: str) -> bool:
+        """只保留 QQ 官方平台；离线/未知平台不误删。"""
+        platform = self._platform(platform_id)
+        if platform is None:
+            return True
+        try:
+            return str(platform.meta().name) in QQ_PLATFORMS
+        except Exception:
+            return True
+
+    def _cleanup_non_qq_groups(self) -> None:
+        """清掉当前仍在线但非 QQ 官方平台的群组记录。"""
+        try:
+            profiles = list(GroupConfig(self.plugin.config).data.get("groups", []))
+        except Exception:
+            profiles = []
+        targets: set[tuple[str, str]] = set()
+        for profile in profiles:
+            if not isinstance(profile, dict):
+                continue
+            umo = str(profile.get("umo") or "")
+            if not valid_group_umo(umo):
+                continue
+            platform_id, group_openid = umo.split(":", 1)[0], umo.rsplit(":", 1)[-1]
+            if platform_id and group_openid and not self._is_qq_platform(platform_id):
+                targets.add((platform_id, group_openid))
+        for section in ("seen_groups", "pending", "verifications"):
+            values = self.plugin.storage.data.get(section, {})
+            if not isinstance(values, dict):
+                continue
+            for item in values.values():
+                if not isinstance(item, dict):
+                    continue
+                platform_id = str(item.get("platform_id") or "")
+                group_openid = str(item.get("group_openid") or "")
+                if platform_id and group_openid and not self._is_qq_platform(platform_id):
+                    targets.add((platform_id, group_openid))
+        if not targets:
+            return
+        for platform_id, group_openid in targets:
+            umo = self._group_umo(platform_id, group_openid)
+            try:
+                GroupConfig(self.plugin.config).remove(umo)
+            except Exception:
+                logger.exception("[%s] 删除非QQ群配置失败：%s", PLUGIN_NAME, umo)
+            try:
+                self.plugin.storage.purge_group(platform_id, group_openid)
+            except Exception:
+                logger.exception("[%s] 删除非QQ群记录失败：%s", PLUGIN_NAME, umo)
+        logger.info("[%s] 已清理 %s 个非 QQ 官方群组", PLUGIN_NAME, len(targets))
+
     def _platform_name(self, platform_id: str) -> str:
         for platform in self._platforms():
             if platform["id"] == platform_id:
@@ -443,6 +498,8 @@ class DashboardAPI:
             group_openid: str = "",
         ) -> dict[str, Any] | None:
             if not valid_group_umo(umo):
+                return None
+            if platform_id and not self._is_qq_platform(platform_id):
                 return None
             item = groups.get(umo)
             if item is None:
@@ -1859,10 +1916,162 @@ class DashboardAPI:
     # ------------------------------------------------------------------
     async def get_groups(self) -> Any:
         try:
+            self._cleanup_non_qq_groups()
             items = self._group_summaries()
-            return json_response({"items": items, "total": len(items)})
+            return json_response(
+                {
+                    "items": items,
+                    "total": len(items),
+                    "platforms": self._platforms(),
+                }
+            )
         except Exception as exc:
             return self._error(exc, "读取群组列表失败")
+
+    @staticmethod
+    def _parse_group_export(raw: bytes) -> list[str]:
+        if len(raw) > 10 * 1024 * 1024:
+            raise DashboardError("导出文件不能超过 10MB")
+        text = ""
+        try:
+            with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+                names = [
+                    name
+                    for name in archive.namelist()
+                    if name.lower().endswith((".csv", ".json"))
+                ]
+                if names:
+                    text = archive.read(names[0]).decode("utf-8-sig")
+        except zipfile.BadZipFile:
+            text = raw.decode("utf-8-sig", errors="replace")
+        if not text.strip():
+            raise DashboardError("导出文件里没有找到 CSV/JSON 群列表")
+        openids: list[str] = []
+        if text.lstrip().startswith(("[", "{")):
+            try:
+                data = json.loads(text)
+            except ValueError as exc:
+                raise DashboardError("导出 JSON 格式不正确") from exc
+            values = data if isinstance(data, list) else data.get("groups", [])
+            for item in values:
+                if isinstance(item, dict):
+                    value = item.get("group_openid") or item.get("openid")
+                else:
+                    value = item
+                if value:
+                    openids.append(str(value).strip())
+        else:
+            reader = csv.DictReader(io.StringIO(text))
+            for row in reader:
+                value = ""
+                for key in ("group_openid", "group_id", "openid"):
+                    if key in row and row[key]:
+                        value = str(row[key]).strip()
+                        break
+                if not value and row:
+                    value = str(next(iter(row.values())) or "").strip()
+                if value:
+                    openids.append(value)
+        result: list[str] = []
+        seen: set[str] = set()
+        for openid in openids:
+            if not openid or openid in seen:
+                continue
+            if not re.fullmatch(r"[0-9A-Za-z_-]{8,160}", openid):
+                continue
+            seen.add(openid)
+            result.append(openid)
+        return result[:5000]
+
+    def _platform_group_openids(self, platform_id: str) -> set[str]:
+        """List local group OpenIDs for one platform (for export sync cleanup)."""
+        result: set[str] = set()
+        values = self.plugin.storage.data
+        for section in ("seen_groups", "pending", "verifications"):
+            items = values.get(section, {})
+            if not isinstance(items, dict):
+                continue
+            for item in items.values():
+                if not isinstance(item, dict):
+                    continue
+                if str(item.get("platform_id") or "") == platform_id:
+                    group_openid = str(item.get("group_openid") or "").strip()
+                    if group_openid:
+                        result.add(group_openid)
+        try:
+            profiles = GroupConfig(self.plugin.config).data.get("groups", [])
+        except Exception:
+            profiles = []
+        for profile in profiles:
+            if not isinstance(profile, dict):
+                continue
+            umo = str(profile.get("umo") or "")
+            if valid_group_umo(umo) and umo.split(":", 1)[0] == platform_id:
+                result.add(umo.rsplit(":", 1)[-1])
+        return result
+
+    async def import_groups(self) -> Any:
+        try:
+            payload = await request.json(default={})
+            if not isinstance(payload, dict):
+                raise DashboardError("请求体格式不正确")
+            encoded = str(payload.get("data") or "")
+            if not encoded:
+                raise DashboardError("缺少导出文件内容")
+            try:
+                raw = base64.b64decode(encoded, validate=True)
+            except Exception as exc:
+                raise DashboardError("导出文件不是有效的 Base64") from exc
+            openids = self._parse_group_export(raw)
+            if not openids:
+                raise DashboardError("没有解析到有效的群 OpenID")
+            platform_id = str(payload.get("platform_id") or "").strip()
+            platforms = self._platforms()
+            if platform_id:
+                platform = next(
+                    (item for item in platforms if item["id"] == platform_id), None
+                )
+            elif len(platforms) == 1:
+                platform = platforms[0]
+            else:
+                platform = None
+            if platform is None:
+                raise DashboardError("请选择要导入到的 QQ 官方机器人")
+            platform_id = str(platform["id"])
+            added = updated = 0
+            for openid in openids:
+                if self.plugin.storage.import_group(platform_id, openid):
+                    added += 1
+                else:
+                    updated += 1
+            keep = set(openids)
+            removed = 0
+            for openid in sorted(self._platform_group_openids(platform_id) - keep):
+                umo = self._group_umo(platform_id, openid)
+                try:
+                    GroupConfig(self.plugin.config).remove(umo)
+                except Exception:
+                    logger.exception("[%s] 移除不在导出列表中的群配置失败：%s", PLUGIN_NAME, umo)
+                try:
+                    self.plugin.storage.purge_group(platform_id, openid)
+                    removed += 1
+                except Exception:
+                    logger.exception("[%s] 移除不在导出列表中的群记录失败：%s", PLUGIN_NAME, umo)
+            return json_response(
+                {
+                    "ok": True,
+                    "added": added,
+                    "updated": updated,
+                    "removed": removed,
+                    "total": len(openids),
+                    "message": (
+                        f"同步完成：新增 {added} 个，已存在 {updated} 个，"
+                        f"移除 {removed} 个已不在群内的记录"
+                    ),
+                }
+            )
+        except Exception as exc:
+            return self._error(exc, "导入群组失败")
 
     async def get_group_detail(self) -> Any:
         try:
@@ -2708,3 +2917,4 @@ class DashboardAPI:
 
 
 __all__ = ["DashboardAPI", "PLUGIN_NAME", "VIEW_NAME"]
+

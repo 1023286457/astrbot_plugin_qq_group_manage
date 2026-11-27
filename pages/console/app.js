@@ -8,7 +8,7 @@ const modalRoot = document.getElementById("modal-root");
 const toastRoot = document.getElementById("toast-root");
 
 const PLUGIN_NAME = "astrbot_plugin_qq_group_manage";
-const PLUGIN_VERSION = "3.1.4";
+const PLUGIN_VERSION = "3.1.5";
 const TAB_IDS = ["overview", "pending", "verify", "groups", "spam", "settings", "broadcast", "data", "lexicon"];
 
 const TABS = [
@@ -2194,6 +2194,74 @@ async function runVerifyAction(item, endpoint) {
 /* 群组                                                               */
 /* ------------------------------------------------------------------ */
 
+async function importGroups() {
+  const file = el("input", { type: "file", accept: ".zip,.csv,.json" });
+  const platforms = state.groups?.platforms || [];
+  const platformSelect = el(
+    "select",
+    { class: "select" },
+    ...platforms.map((item) =>
+      el(
+        "option",
+        { value: item.id },
+        `${item.id || item.name}${item.appid ? ` · ${item.appid}` : ""}${item.online ? "" : "（离线）"}`,
+      ),
+    ),
+  );
+  if (!platforms.length) {
+    platformSelect.append(el("option", { value: "" }, "暂无 QQ 官方机器人"));
+  }
+  const body = el(
+    "div",
+    { class: "field-list" },
+    el(
+      "p",
+      { class: "muted" },
+      "选择 QQ 机器人后台导出的群列表压缩包（export.zip）。导入会以导出文件为准同步该机器人的群组：新增导出中的群，并移除导出中没有的群记录；其他机器人不受影响。",
+    ),
+    el("label", { class: "field" }, el("span", {}, "导出文件"), file),
+    platforms.length > 1
+      ? el("label", { class: "field" }, el("span", {}, "导入到机器人"), platformSelect)
+      : null,
+  );
+  const ok = await showModal({
+    title: "导入群组",
+    description: "从 QQ 机器人后台导出的群列表导入群组",
+    iconName: "upload",
+    confirmText: "同步群组",
+    body,
+  });
+  if (!ok) return;
+  const selected = file.files?.[0];
+  if (!selected) {
+    toast("请先选择 export.zip", "error");
+    return;
+  }
+  if (!platforms.length) {
+    toast("当前没有可用的 QQ 官方机器人", "error");
+    return;
+  }
+  try {
+    const buffer = await selected.arrayBuffer();
+    let binary = "";
+    const bytes = new Uint8Array(buffer);
+    const chunk = 0x8000;
+    for (let index = 0; index < bytes.length; index += chunk) {
+      binary += String.fromCharCode(...bytes.subarray(index, index + chunk));
+    }
+    const result = await apiPost("groups/import", {
+      data: btoa(binary),
+      platform_id: platformSelect.value || platforms[0]?.id || "",
+    });
+    toast(result?.message || "群组导入完成", "success", 5000);
+    await loadTab("groups");
+    await refreshOverviewSilent();
+    syncBadges();
+  } catch (error) {
+    toast(cleanError(error), "error", 5000);
+  }
+}
+
 function renderGroups() {
   const data = state.groups || { items: [], total: 0 };
   const items = data.items || [];
@@ -2240,14 +2308,31 @@ function renderGroups() {
             el("h2", { class: "card-title" }, "群组"),
             el("p", { class: "card-subtitle" }, `${items.length} 个已知群`),
           ),
-          button(
-            "一键获取群名",
-            {
-              className: "btn-ghost btn-sm group-name-all",
-              onClick: () => fetchAllGroupNames(),
-            },
-            icon("refresh-cw", 13),
-            el("span", {}, "一键获取群名"),
+        ),
+        el(
+          "div",
+          { class: "group-action-row" },
+          el(
+            "div",
+            { class: "group-action-stack" },
+            button(
+              "导入群组",
+              {
+                className: "btn-ghost btn-sm",
+                onClick: () => importGroups(),
+              },
+              icon("upload", 13),
+              el("span", {}, "导入群组"),
+            ),
+            button(
+              "一键获取群名",
+              {
+                className: "btn-ghost btn-sm group-name-all",
+                onClick: () => fetchAllGroupNames(),
+              },
+              icon("refresh-cw", 13),
+              el("span", {}, "一键获取群名"),
+            ),
           ),
           iconButton("refresh-cw", "刷新", () => refreshCurrent(true), {
             className: "icon-btn",
@@ -5577,3 +5662,4 @@ function uniqueGroups(items) {
 boot().catch((error) => {
   renderFatal("群管控制台启动失败", cleanError(error));
 });
+

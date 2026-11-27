@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import asyncio
 import base64
@@ -558,7 +558,7 @@ def review_quote(event: AstrMessageEvent) -> set[str] | None:
     PLUGIN_NAME,
     "简单么么熊",
     "QQ 官方机器人群管理：禁言、入群申请审批、分群管理员与 LLM 工具",
-    "3.1.4",
+    "3.1.5",
 )
 class QQGroupAdminPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig) -> None:
@@ -3392,3 +3392,4 @@ def extract_mute_duration(
     text = re.sub(r"<@!?[^>]+>", "", text).strip()
     text = re.sub(r"(?<!\S)@\S+", "", text).strip()
     return text or default_duration.strip() or "1分"
+

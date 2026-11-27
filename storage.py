@@ -297,6 +297,37 @@ class PluginStorage:
         self.ensure_group_uid(umo)
         return True
 
+    def import_group(self, platform_id: str, group_openid: str) -> bool:
+        """Import a group from the official export without pretending it chatted."""
+        platform_id = str(platform_id or "").strip()
+        group_openid = str(group_openid or "").strip()
+        if not platform_id or not group_openid:
+            return False
+        seen = self.data.get("seen_groups")
+        if not isinstance(seen, dict):
+            seen = {}
+            self.data["seen_groups"] = seen
+        umo = f"{platform_id}:GroupMessage:{group_openid}"
+        if umo in seen:
+            self.ensure_group_uid(umo)
+            return False
+        seen[umo] = {
+            "platform_id": platform_id,
+            "group_openid": group_openid,
+            "last_seen": "",
+        }
+        if len(seen) > SEEN_GROUP_LIMIT:
+            oldest = sorted(
+                seen,
+                key=lambda key: str(seen[key].get("last_seen") or ""),
+            )[: len(seen) - SEEN_GROUP_LIMIT]
+            for key in oldest:
+                if key != umo:
+                    seen.pop(key, None)
+        self.save()
+        self.ensure_group_uid(umo)
+        return True
+
     def group_note(self, umo: str) -> str:
         notes = self.data.get("group_notes")
         if not isinstance(notes, dict):

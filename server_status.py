@@ -15,6 +15,7 @@ import os
 import platform
 import shutil
 import socket
+import subprocess
 import time
 from collections import deque
 from datetime import datetime, timedelta
@@ -75,6 +76,92 @@ def _iso(timestamp: float | None = None) -> str:
     return datetime.fromtimestamp(timestamp or time.time()).astimezone().isoformat(
         timespec="seconds"
     )
+
+
+_FONT_CACHE: dict[bool, str] = {}
+
+
+def _find_cjk_font(bold: bool = False) -> str:
+    """Find a CJK-capable font on Windows, Linux, Android/Termux and macOS."""
+    if bold in _FONT_CACHE:
+        return _FONT_CACHE[bold]
+    candidates = [
+        # Windows
+        r"C:\Windows\Fonts\msyhbd.ttc" if bold else r"C:\Windows\Fonts\msyh.ttc",
+        r"C:\Windows\Fonts\simhei.ttf",
+        r"C:\Windows\Fonts\simsun.ttc",
+        # Android / Termux
+        "/system/fonts/NotoSansCJK-Regular.ttc",
+        "/system/fonts/NotoSansCJKsc-Regular.otf",
+        "/system/fonts/NotoSansSC-Regular.otf",
+        "/system/fonts/DroidSansFallbackFull.ttf",
+        "/system/fonts/DroidSansFallback.ttf",
+        "/data/data/com.termux/files/usr/share/fonts/noto/NotoSansCJK-Regular.ttc",
+        # Common Linux distributions
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf",
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/noto/NotoSansCJKsc-Regular.otf",
+        "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+        "/usr/share/fonts/truetype/arphic/uming.ttc",
+        "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
+        # macOS
+        "/System/Library/Fonts/PingFang.ttc",
+        "/System/Library/Fonts/STHeiti Medium.ttc",
+        "/System/Library/Fonts/Hiragino Sans GB.ttc",
+    ]
+    for path in candidates:
+        if Path(path).is_file():
+            _FONT_CACHE[bold] = path
+            return path
+
+    # Ask fontconfig first; it knows the correct CJK face on many distros.
+    fc_match = shutil.which("fc-match")
+    if fc_match:
+        for query in ("Noto Sans CJK SC", "sans-serif:lang=zh-cn", ":lang=zh"):
+            try:
+                result = subprocess.run(
+                    [fc_match, "-f", "%{file}\n", query],
+                    capture_output=True,
+                    text=True,
+                    timeout=3,
+                    check=False,
+                )
+            except Exception:
+                continue
+            for line in result.stdout.splitlines():
+                path = line.strip()
+                if not path or "dejavu" in Path(path).name.casefold():
+                    continue
+                if path and Path(path).is_file():
+                    _FONT_CACHE[bold] = path
+                    return path
+
+    # Last resort: scan common font roots for a CJK-named font.
+    roots = [
+        Path("/usr/share/fonts"),
+        Path("/usr/local/share/fonts"),
+        Path.home() / ".fonts",
+        Path("/system/fonts"),
+    ]
+    tokens = ("notosanscjk", "notosanssc", "sourcehansans", "wqy", "droid", "msyh", "simhei", "pingfang", "hiragino")
+    for root in roots:
+        if not root.is_dir():
+            continue
+        try:
+            paths = root.rglob("*")
+            for path in paths:
+                if path.suffix.lower() not in {".ttf", ".ttc", ".otf"}:
+                    continue
+                name = path.name.casefold().replace(" ", "")
+                if any(token in name for token in tokens):
+                    _FONT_CACHE[bold] = str(path)
+                    return str(path)
+        except OSError:
+            continue
+    _FONT_CACHE[bold] = ""
+    return ""
 
 
 class ServerStatusService:
@@ -624,14 +711,27 @@ class ServerStatusService:
                 draw.line((0, y, width, y), fill=(shade, shade + 5, shade + 16))
 
         def font(size: int, bold: bool = False):
-            candidates = (
-                r"C:\Windows\Fonts\msyhbd.ttc" if bold else r"C:\Windows\Fonts\msyh.ttc",
-                r"C:\Windows\Fonts\simhei.ttf",
+            cjk_font = _find_cjk_font(bold)
+            if cjk_font:
+                try:
+                    return ImageFont.truetype(cjk_font, size)
+                except Exception:
+                    logger.debug(
+                        "[%s] CJK 字体加载失败，尝试其它字体：%s",
+                        PLUGIN_NAME,
+                        cjk_font,
+                    )
+            fallback = (
+                r"C:\Windows\Fonts\msyhbd.ttc"
+                if bold
+                else r"C:\Windows\Fonts\msyh.ttc"
+            )
+            for path in (
+                fallback,
                 "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
                 if bold
                 else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            )
-            for path in candidates:
+            ):
                 try:
                     return ImageFont.truetype(path, size)
                 except Exception:
