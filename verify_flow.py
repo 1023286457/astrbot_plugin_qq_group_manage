@@ -146,6 +146,8 @@ class JoinVerifier:
 
         调用方必须持有该成员的锁，且记录仍是存储中的有效记录。
         """
+        if not self.plugin._disclaimer_ok():
+            return False
         umo = self.plugin._group_umo(record["platform_id"], record["group_openid"])
         allowed = await self.bot_role_allows_verification(
             record["platform_id"], record["group_openid"]
@@ -422,6 +424,8 @@ class JoinVerifier:
             logger.exception("[进群验证] 清理退群成员的验证记录失败")
 
     async def guard(self, event: AstrMessageEvent) -> None:
+        if not self.plugin._disclaimer_ok():
+            return
         key = (event.get_platform_id(), event.get_group_id(), event.get_sender_id())
         if self.storage.verification(*key) is None or not self.plugin._is_qq_group(event):
             return

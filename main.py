@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import asyncio
 import base64
@@ -558,7 +558,7 @@ def review_quote(event: AstrMessageEvent) -> set[str] | None:
     PLUGIN_NAME,
     "简单么么熊",
     "QQ 官方机器人群管理：禁言、入群申请审批、分群管理员与 LLM 工具",
-    "3.1.5",
+    "3.1.6",
 )
 class QQGroupAdminPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig) -> None:
@@ -929,6 +929,8 @@ class QQGroupAdminPlugin(Star):
         notice_type: str,
         item: dict[str, Any],
     ) -> None:
+        if not self._disclaimer_ok():
+            return
         enabled_key = (
             "enable_member_join_notice"
             if notice_type == "member_join"
@@ -1004,6 +1006,8 @@ class QQGroupAdminPlugin(Star):
         self, platform_id: str, item: dict[str, Any]
     ) -> None:
         """GROUP_ADD_ROBOT: make a newly joined group visible immediately."""
+        if not self._disclaimer_ok():
+            return
         group_openid = str(item.get("group_openid") or "").strip()
         if not group_openid:
             logger.warning("[%s] 机器人进群事件缺少 group_openid: %r", PLUGIN_NAME, item)
@@ -1024,6 +1028,8 @@ class QQGroupAdminPlugin(Star):
         self, platform_id: str, item: dict[str, Any]
     ) -> None:
         """GROUP_DEL_ROBOT: remove every local trace of a group after removal."""
+        if not self._disclaimer_ok():
+            return
         group_openid = str(item.get("group_openid") or "").strip()
         if not group_openid:
             logger.warning("[%s] 机器人退群事件缺少 group_openid: %r", PLUGIN_NAME, item)
@@ -1051,6 +1057,8 @@ class QQGroupAdminPlugin(Star):
     async def _handle_join_request_event(
         self, platform_id: str, item: dict[str, Any]
     ) -> None:
+        if not self._disclaimer_ok():
+            return
         group_openid = str(item.get("group_openid") or "")
         if not group_openid:
             logger.warning("[%s] 入群申请缺少 group_openid: %r", PLUGIN_NAME, item)
@@ -1216,6 +1224,8 @@ class QQGroupAdminPlugin(Star):
 
     async def _handle_panel_interaction(self, platform_id: str, interaction: Any) -> bool:
         """Handle qqpanel:* callbacks from the group panel."""
+        if not self._disclaimer_ok():
+            return False
         resolved = getattr(getattr(interaction, "data", None), "resolved", None)
         data = str(getattr(resolved, "button_data", "") or "")
         match = parse_button(data)
@@ -1673,6 +1683,8 @@ class QQGroupAdminPlugin(Star):
     @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE, priority=0)
     async def remember_group_activity(self, event: AstrMessageEvent) -> None:
         """Remember group_openid for the WebUI group list; never stores content."""
+        if not self._disclaimer_ok():
+            return
         if not self._is_qq_group(event):
             # 钉钉群消息也记录，便于在 WebUI 维护分群配置与插件群管名单。
             if (
@@ -1691,11 +1703,15 @@ class QQGroupAdminPlugin(Star):
     @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE, priority=200)
     async def join_verify_guard(self, event: AstrMessageEvent) -> None:
         # 先于违禁词和引用审批执行：未验证成员的消息只做验证处理。
+        if not self._disclaimer_ok():
+            return
         await self.verifier.guard(event)
 
     @filter.command("验证列表")
     async def verify_list_command(self, event: AstrMessageEvent) -> None:
         """查看本群未完成进群验证的成员。"""
+        if not self._disclaimer_ok():
+            return
         if not self._is_qq_group(event):
             yield event.plain_result("该指令仅支持 QQ 官方机器人群聊。")
             return
@@ -1707,6 +1723,8 @@ class QQGroupAdminPlugin(Star):
     @filter.command("验证放行")
     async def verify_release_command(self, event: AstrMessageEvent) -> None:
         """放行被艾特成员的进群验证，验证失败的成员会同时解除禁言。"""
+        if not self._disclaimer_ok():
+            return
         if not self._is_qq_group(event):
             yield event.plain_result("该指令仅支持 QQ 官方机器人群聊。")
             return
@@ -1722,6 +1740,8 @@ class QQGroupAdminPlugin(Star):
     @filter.command("重新验证")
     async def verify_restart_command(self, event: AstrMessageEvent) -> None:
         """让被艾特的成员重新进行进群验证。"""
+        if not self._disclaimer_ok():
+            return
         if not self._is_qq_group(event):
             yield event.plain_result("该指令仅支持 QQ 官方机器人群聊。")
             return
@@ -1736,6 +1756,8 @@ class QQGroupAdminPlugin(Star):
 
     @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE, priority=100)
     async def keyword_mute(self, event: AstrMessageEvent) -> None:
+        if not self._disclaimer_ok():
+            return
         if not self._is_qq_group(event):
             return
         recall_enabled = self._event_feature_setting(
@@ -1805,6 +1827,8 @@ class QQGroupAdminPlugin(Star):
     @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE, priority=150)
     async def link_recall(self, event: AstrMessageEvent) -> None:
         """撤回文字中包含链接或图片中的二维码。"""
+        if not self._disclaimer_ok():
+            return
         if not self._is_qq_group(event):
             return
         link_enabled = self._event_feature_setting(event, "enable_link_recall", False)
@@ -1919,6 +1943,8 @@ class QQGroupAdminPlugin(Star):
     @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE, priority=160)
     async def spam_guard(self, event: AstrMessageEvent) -> None:
         """统计成员消息频率，超限时撤回近期消息并禁言。"""
+        if not self._disclaimer_ok():
+            return
         if not self._is_qq_group(event):
             return
         if not self._event_feature_setting(event, "enable_anti_spam", False):
@@ -1987,6 +2013,8 @@ class QQGroupAdminPlugin(Star):
 
     @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE, priority=10)
     async def reply_review(self, event: AstrMessageEvent) -> None:
+        if not self._disclaimer_ok():
+            return
         if not self._is_qq_group(event) or not self._event_feature_setting(
             event,
             "enable_join_reply_review",
@@ -2041,6 +2069,8 @@ class QQGroupAdminPlugin(Star):
     @filter.command("禁言")
     async def mute_command(self, event: AstrMessageEvent) -> None:
         """禁言被艾特的成员，时间支持 30秒、10分、2小时、1天。"""
+        if not self._disclaimer_ok():
+            return
         if not self._is_qq_group(event):
             yield event.plain_result("该指令仅支持 QQ 官方机器人群聊。")
             return
@@ -2084,6 +2114,8 @@ class QQGroupAdminPlugin(Star):
     @filter.command("解禁")
     async def unmute_command(self, event: AstrMessageEvent) -> None:
         """解除被艾特成员的禁言。"""
+        if not self._disclaimer_ok():
+            return
         if not self._is_qq_group(event):
             yield event.plain_result("该指令仅支持 QQ 官方机器人群聊。")
             return
@@ -2112,6 +2144,8 @@ class QQGroupAdminPlugin(Star):
     @filter.command("踢人")
     async def kick_members_command(self, event: AstrMessageEvent) -> None:
         """批量移出被艾特的群成员（QQ 官方接口，单次最多 20 人）。"""
+        if not self._disclaimer_ok():
+            return
         if not self._is_qq_group(event):
             yield event.plain_result("该指令仅支持 QQ 官方机器人群聊。")
             return
@@ -2169,6 +2203,8 @@ class QQGroupAdminPlugin(Star):
 
     @filter.command("添加群管")
     async def add_group_admin(self, event: AstrMessageEvent) -> None:
+        if not self._disclaimer_ok():
+            return
         if not self._is_qq_group(event):
             yield event.plain_result("该指令仅支持 QQ 官方机器人群聊。")
             return
@@ -2197,6 +2233,8 @@ class QQGroupAdminPlugin(Star):
 
     @filter.command("删除群管", alias={"移除群管"})
     async def remove_group_admin(self, event: AstrMessageEvent) -> None:
+        if not self._disclaimer_ok():
+            return
         if not self._is_qq_group(event):
             yield event.plain_result("该指令仅支持 QQ 官方机器人群聊。")
             return
@@ -2231,6 +2269,8 @@ class QQGroupAdminPlugin(Star):
         group_name: str = "",
     ) -> None:
         """Bind the current group_openid to a human-readable QQ group number."""
+        if not self._disclaimer_ok():
+            return
         if not self._is_qq_group(event):
             yield event.plain_result("该指令仅支持 QQ 官方机器人群聊。")
             return
@@ -2280,6 +2320,8 @@ class QQGroupAdminPlugin(Star):
 
     @filter.command("群管列表")
     async def list_group_admins(self, event: AstrMessageEvent) -> None:
+        if not self._disclaimer_ok():
+            return
         if not self._is_qq_group(event):
             yield event.plain_result("该指令仅支持 QQ 官方机器人群聊。")
             return
@@ -2296,6 +2338,8 @@ class QQGroupAdminPlugin(Star):
 
     @filter.command("群管帮助")
     async def group_admin_help(self, event: AstrMessageEvent) -> None:
+        if not self._disclaimer_ok():
+            return
         if not self._is_qq_group(event):
             yield event.plain_result("该指令仅支持已启用的 QQ 官方机器人群聊。")
             return
@@ -2309,6 +2353,8 @@ class QQGroupAdminPlugin(Star):
     @filter.command("查看状态", alias={"状态"})
     async def server_status_command(self, event: AstrMessageEvent) -> None:
         """发送服务器运行状态图片，失败时降级为文字摘要。"""
+        if not self._disclaimer_ok():
+            return
         is_qq = event.get_platform_name() in QQ_PLATFORMS
         if is_qq and not self._is_qq_group(event):
             yield event.plain_result("该指令仅支持 QQ 官方机器人群聊。")
@@ -2371,6 +2417,8 @@ class QQGroupAdminPlugin(Star):
 
     @filter.command("菜单", alias={"菜单指令", "群管面板"})
     async def group_panel_command(self, event: AstrMessageEvent) -> None:
+        if not self._disclaimer_ok():
+            return
         platform_name = event.get_platform_name()
         if platform_name in QQ_PLATFORMS:
             if not self._is_qq_group(event):
@@ -2584,6 +2632,8 @@ class QQGroupAdminPlugin(Star):
         value: str = "",
     ) -> None:
         """查看或修改当前群的独立功能开关。"""
+        if not self._disclaimer_ok():
+            return
         if not self._is_qq_group(event):
             yield event.plain_result("该指令仅支持已启用的 QQ 官方机器人群聊。")
             return
@@ -2750,6 +2800,8 @@ class QQGroupAdminPlugin(Star):
     @filter.command("禁言状态")
     async def mute_status_command(self, event: AstrMessageEvent) -> None:
         """查看全员禁言规则和当前处于禁言中的成员。"""
+        if not self._disclaimer_ok():
+            return
         if not self._is_qq_group(event):
             yield event.plain_result("该指令仅支持 QQ 官方机器人群聊。")
             return
@@ -2785,6 +2837,8 @@ class QQGroupAdminPlugin(Star):
             duration(string): 可选禁言时长，如 30秒、10分、2小时、1天；省略时使用插件默认时长，填 0 或 解除表示解禁
         """
         event = resolve_tool_event(event)
+        if not self._disclaimer_ok():
+            return "请先在 WebUI 配置页阅读并同意免责声明后再使用插件功能。"
         if not self._is_qq_group(event):
             return "当前场景不是 QQ 官方机器人群聊，无法使用群禁言工具。"
         if not self._event_feature_setting(event, "enable_mute_tool"):
@@ -2817,6 +2871,8 @@ class QQGroupAdminPlugin(Star):
             member_openid(string): 被解除禁言成员的群成员 OpenID
         """
         event = resolve_tool_event(event)
+        if not self._disclaimer_ok():
+            return "请先在 WebUI 配置页阅读并同意免责声明后再使用插件功能。"
         if not self._is_qq_group(event):
             return "当前场景不是 QQ 官方机器人群聊，无法使用群解禁工具。"
         if not self._event_feature_setting(event, "enable_unmute_tool"):
@@ -2835,6 +2891,8 @@ class QQGroupAdminPlugin(Star):
     async def mute_status_tool(self, event: Any) -> str:
         """查询当前 QQ 群的全员禁言规则和被禁言成员列表，开启严格权限审查时仅群管可用。"""
         event = resolve_tool_event(event)
+        if not self._disclaimer_ok():
+            return "请先在 WebUI 配置页阅读并同意免责声明后再使用插件功能。"
         if not self._is_qq_group(event):
             return "当前场景不是 QQ 官方机器人群聊，无法查询群禁言状态。"
         if not self._event_feature_setting(event, "enable_mute_status_tool"):
@@ -2867,6 +2925,8 @@ class QQGroupAdminPlugin(Star):
             limit(number): 拉取条数，范围 1 到 100；省略或填 0 使用插件配置的默认条数
         """
         event = resolve_tool_event(event)
+        if not self._disclaimer_ok():
+            return "请先在 WebUI 配置页阅读并同意免责声明后再使用插件功能。"
         if not self._is_qq_group(event):
             return "当前场景不是 QQ 官方机器人群聊，无法拉取入群申请。"
         if not self._event_feature_setting(event, "enable_join_list_tool"):
@@ -2919,6 +2979,8 @@ class QQGroupAdminPlugin(Star):
             reject_reason(string): 拒绝理由，同意时留空
         """
         event = resolve_tool_event(event)
+        if not self._disclaimer_ok():
+            return "请先在 WebUI 配置页阅读并同意免责声明后再使用插件功能。"
         if not self._is_qq_group(event):
             return "当前场景不是 QQ 官方机器人群聊，无法审批入群申请。"
         if not self._event_feature_setting(event, "enable_join_review_tool"):
@@ -3185,8 +3247,10 @@ class QQGroupAdminPlugin(Star):
             raise RuntimeError("找不到当前 QQ 官方平台实例")
         return platform
 
-    def _is_qq_group(self, event: AstrMessageEvent) -> bool:
-        return (
+    def _disclaimer_ok(self) -> bool:
+        return bool(self.storage.disclaimer_accepted())
+
+    def _is_qq_group(self, event: AstrMessageEvent) -> bool:        return (
             event.get_platform_name() in QQ_PLATFORMS
             and bool(event.get_group_id())
             and self._umo_enabled(self._event_group_umo(event))
@@ -3392,4 +3456,5 @@ def extract_mute_duration(
     text = re.sub(r"<@!?[^>]+>", "", text).strip()
     text = re.sub(r"(?<!\S)@\S+", "", text).strip()
     return text or default_duration.strip() or "1分"
+
 

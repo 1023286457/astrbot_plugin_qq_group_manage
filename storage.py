@@ -42,6 +42,7 @@ class PluginStorage:
             "group_ids": {},
             "free_group_ids": [],
             "ui_preferences": {},
+            "disclaimer_accepted": False,
         }
         self.load()
 
@@ -84,6 +85,8 @@ class PluginStorage:
                 raise ValueError(f"{name} 必须是对象")
         if not isinstance(raw.get("free_group_ids", []), list):
             raise ValueError("free_group_ids 必须是列表")
+        if not isinstance(raw.get("disclaimer_accepted", False), bool):
+            raise ValueError("disclaimer_accepted 必须是布尔值")
         if any(
             not isinstance(item, dict) for item in raw.get("verifications", {}).values()
         ):
@@ -327,6 +330,13 @@ class PluginStorage:
         self.save()
         self.ensure_group_uid(umo)
         return True
+
+    def disclaimer_accepted(self) -> bool:
+        return bool(self.data.get("disclaimer_accepted", False))
+
+    def set_disclaimer_accepted(self, accepted: bool) -> None:
+        self.data["disclaimer_accepted"] = bool(accepted)
+        self.save()
 
     def group_note(self, umo: str) -> str:
         notes = self.data.get("group_notes")

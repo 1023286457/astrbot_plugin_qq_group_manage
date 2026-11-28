@@ -57,7 +57,8 @@ except Exception as exc:  # pragma: no cover - 仅在旧的 AstrBot 上触发
 
 PLUGIN_NAME = "astrbot_plugin_qq_group_manage"
 PLUGIN_DISPLAY_NAME = "QQ官机群管"
-PLUGIN_VERSION = "3.1.5"
+PLUGIN_VERSION = "3.1.6"
+DISCLAIMER_URL = "https://docs.qq.com/doc/DZE94aXRTbGppaUtn"
 GITHUB_RELEASE_API = (
     "https://api.github.com/repos/1023286457/"
     "astrbot_plugin_qq_group_manage/releases/latest"
@@ -237,6 +238,8 @@ class DashboardAPI:
 
         routes = (
             ("overview", self.get_overview, ["GET"], "群管总览"),
+            ("disclaimer", self.get_disclaimer, ["GET"], "免责声明状态"),
+            ("disclaimer/accept", self.accept_disclaimer, ["POST"], "同意或撤销免责声明"),
             ("pending", self.get_pending, ["GET"], "待审批入群申请"),
             ("pending/review", self.review_pending, ["POST"], "审批入群申请"),
             ("pending/delete", self.delete_pending, ["POST"], "删除本地待审记录"),
@@ -280,6 +283,11 @@ class DashboardAPI:
             ("lexicons/delete", self.delete_lexicon, ["POST"], "删除本地词库"),
             ("lexicons/export", self.export_lexicon, ["GET"], "导出词库"),
             ("lexicons/test", self.test_lexicon, ["POST"], "命中测试"),
+            ("lexicons/words", self.get_lexicon_words, ["GET"], "读取词库关键词"),
+            ("lexicons/words/update", self.update_lexicon_words, ["POST"], "批量维护关键词"),
+            ("lexicons/rule/save", self.save_lexicon_rule, ["POST"], "保存正则规则"),
+            ("lexicons/rule/toggle", self.toggle_lexicon_rule, ["POST"], "启停正则规则"),
+            ("lexicons/rule/delete", self.delete_lexicon_rule, ["POST"], "删除正则规则"),
             ("status/overview", self.get_server_status, ["GET"], "服务器运行状态"),
             ("status/history", self.get_server_history, ["GET"], "服务器历史趋势"),
             ("status/events", self.get_server_events, ["GET"], "服务器异常事件"),
@@ -322,8 +330,29 @@ class DashboardAPI:
             ("import/config", self.import_config, ["POST"], "导入插件配置"),
         )
         for route, handler, methods, desc in routes:
+            if route not in {
+                "overview",
+                "disclaimer",
+                "disclaimer/accept",
+                "config",
+                "groups",
+                "ui/preferences",
+            }:
+                handler = self._disclaimer_guard(handler)
             register(f"{prefix}{route}", handler, methods, desc)
         return True
+
+    def _disclaimer_guard(self, handler: Any) -> Any:
+        """Block operational WebUI routes until the disclaimer is accepted."""
+        async def guarded(*args: Any, **kwargs: Any) -> Any:
+            if not self.plugin.storage.disclaimer_accepted():
+                return error_response(
+                    "请先在配置页阅读并同意免责声明",
+                    status_code=403,
+                )
+            return await handler(*args, **kwargs)
+
+        return guarded
 
     def unregister(self) -> None:
         prefix = f"/{PLUGIN_NAME}/"
@@ -1207,6 +1236,39 @@ class DashboardAPI:
     # ------------------------------------------------------------------
     # Handler: 总览
     # ------------------------------------------------------------------
+    async def get_disclaimer(self) -> Any:
+        try:
+            return json_response(
+                {
+                    "accepted": bool(self.plugin.storage.disclaimer_accepted()),
+                    "url": DISCLAIMER_URL,
+                }
+            )
+        except Exception as exc:
+            return self._error(exc, "读取免责声明状态失败")
+
+    async def accept_disclaimer(self) -> Any:
+        try:
+            payload = await request.json(default={})
+            if not isinstance(payload, dict):
+                raise DashboardError("请求体格式不正确")
+            accepted = bool(payload.get("accepted"))
+            self.plugin.storage.set_disclaimer_accepted(accepted)
+            logger.info(
+                "[%s] 免责声明状态已更新：%s",
+                PLUGIN_NAME,
+                "已同意" if accepted else "已撤销",
+            )
+            return json_response(
+                {
+                    "ok": True,
+                    "accepted": accepted,
+                    "url": DISCLAIMER_URL,
+                }
+            )
+        except Exception as exc:
+            return self._error(exc, "保存免责声明状态失败")
+
     async def get_overview(self) -> Any:
         try:
             pending = self._pending_items()
@@ -1290,6 +1352,10 @@ class DashboardAPI:
                         "enabled_verify_groups": enabled_verify_groups,
                         "storage_available": storage_ok,
                         "duplicate_profiles": duplicate_profiles,
+                    },
+                    "disclaimer": {
+                        "accepted": bool(self.plugin.storage.disclaimer_accepted()),
+                        "url": DISCLAIMER_URL,
                     },
                     "features": self._features(),
                     "groups": groups[:8],
@@ -1424,8 +1490,6 @@ class DashboardAPI:
         try:
             payload = await request.json(default={})
             lid = str(payload.get("id") or "").strip()
-            if lid.startswith("builtin_"):
-                raise DashboardError("内置词库不能删除，只能停用")
             if not self.plugin.lexicons.delete(lid):
                 raise DashboardError("词库不存在")
             return json_response(
@@ -1456,6 +1520,83 @@ class DashboardAPI:
             return json_response(result)
         except Exception as exc:
             return self._error(exc, "命中测试失败")
+
+    async def get_lexicon_words(self) -> Any:
+        try:
+            category_id = str(request.query.get("id") or "").strip()
+            if not category_id:
+                raise DashboardError("缺少词库 ID")
+            return json_response(self.plugin.lexicons.words_payload(category_id))
+        except Exception as exc:
+            return self._error(exc, "读取词库关键词失败")
+
+    async def update_lexicon_words(self) -> Any:
+        try:
+            payload = await request.json(default={})
+            if not isinstance(payload, dict):
+                raise DashboardError("请求体格式不正确")
+            category_id = str(payload.get("id") or "").strip()
+            action = str(payload.get("action") or "").strip()
+            words = payload.get("words")
+            if not isinstance(words, list):
+                raise DashboardError("words 必须是列表")
+            if action not in {"add", "delete", "enable", "disable"}:
+                raise DashboardError("不支持的关键词操作")
+            result = self.plugin.lexicons.update_words(category_id, action, words)
+            return json_response(
+                {
+                    **result,
+                    **self.plugin.lexicons.list_payload(),
+                }
+            )
+        except Exception as exc:
+            return self._error(exc, "维护词库关键词失败")
+
+    async def save_lexicon_rule(self) -> Any:
+        try:
+            payload = await request.json(default={})
+            if not isinstance(payload, dict):
+                raise DashboardError("请求体格式不正确")
+            result = self.plugin.lexicons.save_rule(
+                rule_id=str(payload.get("id") or ""),
+                category_id=str(payload.get("category_id") or ""),
+                name=str(payload.get("name") or ""),
+                pattern=str(payload.get("pattern") or ""),
+                description=str(payload.get("description") or ""),
+                enabled=bool(payload.get("enabled", True)),
+            )
+            return json_response({**result, **self.plugin.lexicons.list_payload()})
+        except Exception as exc:
+            return self._error(exc, "保存正则规则失败")
+
+    async def toggle_lexicon_rule(self) -> Any:
+        try:
+            payload = await request.json(default={})
+            rule_id = str(payload.get("id") or "").strip()
+            if not rule_id:
+                raise DashboardError("缺少规则 ID")
+            self.plugin.lexicons.toggle_rule(
+                rule_id, bool(payload.get("enabled"))
+            )
+            return json_response(
+                {"ok": True, **self.plugin.lexicons.list_payload()}
+            )
+        except Exception as exc:
+            return self._error(exc, "切换正则规则失败")
+
+    async def delete_lexicon_rule(self) -> Any:
+        try:
+            payload = await request.json(default={})
+            rule_id = str(payload.get("id") or "").strip()
+            if not rule_id:
+                raise DashboardError("缺少规则 ID")
+            if not self.plugin.lexicons.delete_rule(rule_id):
+                raise DashboardError("正则规则不存在")
+            return json_response(
+                {"ok": True, **self.plugin.lexicons.list_payload()}
+            )
+        except Exception as exc:
+            return self._error(exc, "删除正则规则失败")
 
     # ------------------------------------------------------------------
     # Handler: 风险消息撤回
@@ -2917,4 +3058,5 @@ class DashboardAPI:
 
 
 __all__ = ["DashboardAPI", "PLUGIN_NAME", "VIEW_NAME"]
+
 
